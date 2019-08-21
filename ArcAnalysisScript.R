@@ -89,11 +89,15 @@ nonmutator.50K <- read.csv('../data/Gen50000_NM.csv',header=TRUE,stringsAsFactor
          locus_tag,mutation_category,snp_type) %>% filter(clone=='A')
 
 
-mutator.50K.in.up.O2.data <- mutator.50K %>% filter(locus_tag %in% up.O2.data$REL606_locus_tag) %>% filter(snp_type != 'synonymous')
-mutator.50K.in.down.O2.data <- mutator.50K %>% filter(locus_tag %in% down.O2.data$REL606_locus_tag) %>% filter(snp_type != 'synonymous')
+mutator.50K.in.up.O2.data <- mutator.50K %>% filter(locus_tag %in% up.O2.data$REL606_locus_tag)
+mutator.50K.in.down.O2.data <- mutator.50K %>% filter(locus_tag %in% down.O2.data$REL606_locus_tag)
 
-nonmutator.50K.in.up.O2.data <- nonmutator.50K %>% filter(locus_tag %in% up.O2.data$REL606_locus_tag) %>% filter(snp_type != 'synonymous')
-nonmutator.50K.in.down.O2.data <- nonmutator.50K %>% filter(locus_tag %in% down.O2.data$REL606_locus_tag) %>% filter(snp_type != 'synonymous')
+## originally I filtered out synonymous mutations to reduce noise, but not necessary!
+mutator.50K.in.up.O2.data.no.dS <- filter(mutator.50K.in.up.O2.data, snp_type != 'synonymous')
+mutator.50K.in.down.O2.data.no.dS <- filter(mutator.50K.in.down.O2.data, snp_type != 'synonymous')
+
+nonmutator.50K.in.up.O2.data <- nonmutator.50K %>% filter(locus_tag %in% up.O2.data$REL606_locus_tag)
+nonmutator.50K.in.down.O2.data <- nonmutator.50K %>% filter(locus_tag %in% down.O2.data$REL606_locus_tag)
 
 ## fold-change is the ratios of the means of the measurements of K-12 str. MC4100
 ## grown under aerobic or anaerobic conditions.
@@ -105,29 +109,29 @@ nonmutator.50K.in.down.O2.data <- nonmutator.50K %>% filter(locus_tag %in% down.
 target.prob <- sum(up.O2.data$length)/(sum(up.O2.data$length)+sum(down.O2.data$length))
 
 ## aerobic genes are under positive selection.
-nrow(nonmutator.50K.in.up.O2.data) ## 17
-nrow(nonmutator.50K.in.down.O2.data) ## 36
-## highly significant difference: p-value = 1.522e-07.
+nrow(nonmutator.50K.in.up.O2.data) ## 21
+nrow(nonmutator.50K.in.down.O2.data) ## 38
+## highly significant difference: p-value = 8.39e-07.
 binom.test(x=nrow(nonmutator.50K.in.up.O2.data), n = nrow(nonmutator.50K.in.up.O2.data)+nrow(nonmutator.50K.in.down.O2.data),
             p=target.prob,alternative="two.sided")
 
 ## Nkrumah predicts that anaerobic-specific genes accumulate more mutations than
 ## aerobic specific genes, due to relaxed selection.
 
-nrow(mutator.50K.in.up.O2.data) ## 644
-nrow(mutator.50K.in.down.O2.data) ## 244
+nrow(mutator.50K.in.up.O2.data) ## 836
+nrow(mutator.50K.in.down.O2.data) ## 333
 
-## still significant in mutators!! p-value = 0.005317.
+## still significant in mutators!! p-value = 0.004036.
 binom.test(x=nrow(mutator.50K.in.up.O2.data), n = nrow(mutator.50K.in.up.O2.data)+nrow(mutator.50K.in.down.O2.data),
             p=target.prob,alternative="two.sided")
 
-## By using a more accurate target distribution, it's clear that this effect is driven by
-## non-point mutations. There's no significant reduction in hits if we JUST consider non-synonymous mutations.
-binom.test(x=nrow(mutator.50K.in.up.O2.data), n = nrow(mutator.50K.in.up.O2.data)+nrow(mutator.50K.in.down.O2.data),
-            p=target.prob2,alternative="two.sided")
+nrow(mutator.50K.in.up.O2.data.no.dS) ## 644
+nrow(mutator.50K.in.down.O2.data.no.dS) ## 244
 
+## still significant in mutators!! p-value = 0.005317.
+binom.test(x=nrow(mutator.50K.in.up.O2.data.no.dS), n = nrow(mutator.50K.in.up.O2.data.no.dS)+nrow(mutator.50K.in.down.O2.data.no.dS),
+            p=target.prob,alternative="two.sided")
 
-######## I'm no longer sure that the second statistic are correct...
 ## redo, just on non-synonymous mutations, and on rigorously computed target sizes
 ## from measureTargetSize.py.
 
@@ -141,20 +145,28 @@ total.synon.sites <- 890787
 total.nonsynon.sites <- 3001647
 
 target.prob2 <- anaerobic.nonsynon.sites/(anaerobic.nonsynon.sites+aerobic.nonsynon.sites)
+target.prob3 <- (anaerobic.nonsynon.sites+anaerobic.synon.sites)/(anaerobic.nonsynon.sites+anaerobic.synon.sites+aerobic.nonsynon.sites+aerobic.synon.sites)
 
 ## non-mutator result is more significant! p < 10^-8.
 binom.test(x=nrow(filter(nonmutator.50K.in.up.O2.data,snp_type=='nonsynonymous')), n = nrow(filter(nonmutator.50K.in.up.O2.data,snp_type=='nonsynonymous'))+nrow(filter(nonmutator.50K.in.down.O2.data,snp_type=='nonsynonymous')),
             p=target.prob,alternative="two.sided")
 
-## mutator result is no longer significant when just looking at nonsynonymous mutations: p = 0.1113.
-binom.test(x=nrow(filter(mutator.50K.in.up.O2.data,snp_type=='nonsynonymous')), n = nrow(filter(mutator.50K.in.up.O2.data,snp_type=='nonsynonymous'))+nrow(filter(mutator.50K.in.down.O2.data,snp_type=='nonsynonymous')),
-            p=target.prob,alternative="two.sided")
+## By using a more accurate target distribution, it's clear that this effect is driven by
+## non-point mutations. There's no significant reduction in hits if we JUST consider non-synonymous mutations.
 
+## just considering dN-- result is marginally insignificant (p = 0.05893).
+mutator.50K.in.up.O2.data.just.dN <- filter(mutator.50K.in.up.O2.data, snp_type == 'nonsynonymous')
+mutator.50K.in.down.O2.data.just.dN <- filter(mutator.50K.in.down.O2.data, snp_type == 'nonsynonymous')
 
+binom.test(x=nrow(mutator.50K.in.up.O2.data.just.dN), n = nrow(mutator.50K.in.up.O2.data.just.dN)+nrow(mutator.50K.in.down.O2.data.just.dN),
+            p=target.prob2,alternative="two.sided")
 
+## my guess is that dS will reduce this signal-- but I'm wrong! (p = 0.03417)
+mutator.50K.in.up.O2.data.dNanddS <- filter(mutator.50K.in.up.O2.data, snp_type %in% c('nonsynonymous','synonymous'))
+mutator.50K.in.down.O2.data.dNanddS <- filter(mutator.50K.in.down.O2.data, snp_type %in% c('nonsynonymous','synonymous'))
 
-
-
+binom.test(x=nrow(mutator.50K.in.up.O2.data.dNanddS), n = nrow(mutator.50K.in.up.O2.data.dNanddS)+nrow(mutator.50K.in.down.O2.data.dNanddS),
+            p=target.prob3,alternative="two.sided")
 
 
 ##################

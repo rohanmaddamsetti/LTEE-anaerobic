@@ -22,7 +22,10 @@ def main():
         except KeyError:
             gene = 'NA'
         locus_tag = feat.qualifiers['locus_tag'].pop()
-        product = feat.qualifiers['product'].pop()
+        try:
+            product = feat.qualifiers['product'].pop()
+        except:
+            product = 'NA'
         try:
             note = feat.qualifiers['note'].pop()
             blattner = note.split('MG1655 equivalent: ')[-1]

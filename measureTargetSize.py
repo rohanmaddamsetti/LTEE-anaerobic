@@ -1,8 +1,7 @@
 import numpy
 import sys
-from math import fabs,log,exp,fabs
-import glob
-import os
+from math import fabs
+from random import sample
 
 '''
 measureTargetSize.py by Rohan Maddamsetti.
@@ -14,12 +13,6 @@ IMPORTANT TODO: gene numbers in this script and in ArcAB-contingency-analysis do
 exactly. I need to debug this for publication.
 
 '''
-
-
-ancestral_araA_mutation_location = 70867 #, araA, T->C @ 70867
-ancestral_recD_mutation_location = 2847052 #, recD, A->G @ 2847052
-        
-#NUM_SYNONYMOUS_SITES = 941000.0
 
 base_table = {'A':'T','T':'A','G':'C','C':'G'}
 
@@ -552,7 +545,14 @@ def parse_gene_list(reference_sequence=None, filename="../data/REL606.7.gbk"):
                 while gene_name in observed_gene_names:
                     i+=1
                     gene_name = "%s_%d" % (old_gene_name,i)
-                
+
+                ## make sure that the locus_tag is defined,
+                ## and that it is not already in the list.
+                if not len(locus_name):
+                    continue
+                if locus_name in locus_tags:
+                    continue
+                    
                 locus_tags.append(locus_name)
                 start_positions.append(gene_start)
                 end_positions.append(gene_end)
@@ -614,7 +614,6 @@ def parse_repeat_list(filename="../data/REL606.7.gbk"):
                 complements.append(complement)
         
         else:
-                
             line = file.readline()
     file.close()
     
@@ -635,7 +634,9 @@ def parse_specific_tags(gene_f):
             continue
         fields = line.split(',')
         tag = fields[3].strip("\"")
-        tags.append(tag)
+        ## don't append duplicates or empty entries.
+        if len(tag) and tag not in tags:
+            tags.append(tag)
     return tags
 
 def parse_anaerobic_tags():
@@ -667,7 +668,72 @@ def filter_anaerobic_gene_data(gene_data):
 def filter_aerobic_gene_data(gene_data):
     return filter_gene_data(gene_data, parse_aerobic_tags())
 
+def choose_random_tags(gene_data,N):
+    ''' choose N genes out of gene_data.
+    return: a list of randomly selected locus_tags.'''
+    locus_tags = gene_data[0]
+    random_tags = sample(locus_tags, N)
+    return(random_tags)
 
+def tag_to_gene(tags,gene_data):
+    locus_tags, gene_names, start_positions, end_positions, promoter_start_positions, promoter_end_positions, gene_sequences, strands = gene_data
+    tag_dict = {}
+    for i,l in enumerate(locus_tags):
+        if l in tags:
+            tag_dict[l] = gene_names[i]
+    mapped_genes = [tag_dict[x] for x in tags]
+    return mapped_genes
+
+def print_random_gene_csv(random_tags,gene_data, outf):
+    random_genes = tag_to_gene(random_tags, gene_data)
+    outfh = open(outf,'w')
+    outfh.write('gene,REL606_locus_tag\n')
+    for g,t in zip(random_genes,random_tags):
+        outfh.write(g+','+t+'\n')
+    outfh.close()
+    
+def print_target_size_statistics(setname, data):
+    ''' 
+    to write out a table of the results I need in
+    aerobic-anaerobic-metagenomics.R, represent rows
+    in the csv file as a list of strings.
+
+    Header: 
+    set, size, total_gene_length, synon_sites, non_synon_sites
+    Returns a list of strings.
+    '''
+
+    position_gene_map, effective_gene_lengths, substitution_specific_synonymous_fraction = create_annotation_map(data, repeat_data, mask_data)
+
+    locus_tags, gene_names, start_positions, end_positions, promoter_start_positions, promoter_end_positions, gene_sequences, strands = data
+    total_gene_set_length = sum([fabs(end_pos-start_pos) for start_pos, end_pos in zip(start_positions,end_positions)])
+    
+    print("Masked:", effective_gene_lengths['masked'])
+    print("Synonymous sites:", effective_gene_lengths['synonymous'])
+    print("Nonsynonymous sites:", effective_gene_lengths['nonsynonymous'])
+    print("Noncoding sites:", effective_gene_lengths['noncoding'])
+    
+    print("Nonsynonymous:synonymous ratio:", effective_gene_lengths['nonsynonymous']/effective_gene_lengths['synonymous'])
+    print("Noncoding:synonymous ratio:", effective_gene_lengths['noncoding']/effective_gene_lengths['synonymous'])
+
+    print('Total number of sites:', total_gene_set_length)
+    print(len(data[0]), "genes")
+
+    set_size = len(data[0])
+    synon_sites = effective_gene_lengths['synonymous']
+    nonsynon_sites = effective_gene_lengths['nonsynonymous']
+    
+    fields = [str(x) for x in (setname,set_size,total_gene_set_length,synon_sites,nonsynon_sites)]
+    return ','.join(fields)
+
+def write_stats_to_file(f,lines):
+    header = 'set, size, total_gene_length, synon_sites, non_synon_sites'
+    with open(f,'w') as fh:
+        fh.write(header+'\n')
+        for l in lines:
+            fh.write(l+'\n')
+    fh.close()
+    
 if __name__=='__main__':
     reference_sequence = parse_reference_genome()
     gene_data = parse_gene_list()
@@ -676,41 +742,41 @@ if __name__=='__main__':
 
     ## filter gene_data based on whether in anaerobic-specific genes.
     anaerobic_gene_data = filter_anaerobic_gene_data(gene_data)
-    
     print('\nANAEROBIC-SPECIFIC GENE STATISTICS:\n')
-    anaerobic_position_gene_map, anaerobic_effective_gene_lengths, anaerobic_substitution_specific_synonymous_fraction = create_annotation_map(anaerobic_gene_data, repeat_data, mask_data)
-    
-    print("Masked:", anaerobic_effective_gene_lengths['masked'])
-    print("Synonymous sites:", anaerobic_effective_gene_lengths['synonymous'])
-    print("Nonsynonymous sites:", anaerobic_effective_gene_lengths['nonsynonymous'])
-    print("Nonsynonymous:synonymous ratio:", anaerobic_effective_gene_lengths['nonsynonymous']/anaerobic_effective_gene_lengths['synonymous'])
-    print(len(anaerobic_gene_data[0]), "genes")
-
+    anaerobic_string = print_target_size_statistics('anaerobic', anaerobic_gene_data)
     
     ## filter gene_data based on whether in aerobic-specific genes.
     aerobic_gene_data = filter_aerobic_gene_data(gene_data)
-
     print('\nAEROBIC-SPECIFIC GENE STATISTICS:\n')
-    aerobic_position_gene_map, aerobic_effective_gene_lengths, aerobic_substitution_specific_synonymous_fraction = create_annotation_map(aerobic_gene_data, repeat_data, mask_data)
-    
-    print("Masked:", aerobic_effective_gene_lengths['masked'])
-    print("Synonymous sites:", aerobic_effective_gene_lengths['synonymous'])
-    print("Nonsynonymous sites:", aerobic_effective_gene_lengths['nonsynonymous'])
-    print("Nonsynonymous:synonymous ratio:", aerobic_effective_gene_lengths['nonsynonymous']/aerobic_effective_gene_lengths['synonymous'])
-    print(len(aerobic_gene_data[0]), "genes")
+    aerobic_string = print_target_size_statistics('aerobic', aerobic_gene_data)
 
     ## now print statistics for the whole genome.
     print('\nWHOLE GENOME STATISTICS:\n')
-    position_gene_map, effective_gene_lengths, substitution_specific_synonymous_fraction = create_annotation_map(gene_data, repeat_data, mask_data)
-    
     print("Total:", len(reference_sequence))
-    print("Masked:", effective_gene_lengths['masked'])
-    print("Synonymous sites:", effective_gene_lengths['synonymous'])
-    print("Nonsynonymous sites:", effective_gene_lengths['nonsynonymous'])
-    print("Noncoding sites:", effective_gene_lengths['noncoding'])
-    
-    print("Nonsynonymous:synonymous ratio:", effective_gene_lengths['nonsynonymous']/effective_gene_lengths['synonymous'])
-    print("Noncoding:synonymous ratio:", effective_gene_lengths['noncoding']/effective_gene_lengths['synonymous'])
-    print(len(gene_data[0]), "genes")
+    total_genome_string = print_target_size_statistics('genome', gene_data)
 
+    print('\nSTATISTICS FOR A SET OF RANDOM GENES, THE SIZE OF ANAEROBIC GENE SET: ')
+    ## now print statistics for a random set of genes with the same length as the anaerobic genes.
+
+    anaerobic_rando_set = choose_random_tags(gene_data,len(anaerobic_gene_data[0]))
+    anaerobic_random_csvfile = '../results/random-anaerobic-set.csv'
+    print('printing random genes to:',anaerobic_random_csvfile)
+    print_random_gene_csv(anaerobic_rando_set,gene_data, anaerobic_random_csvfile)
+    anaerobic_rando_gene_data = filter_gene_data(gene_data, anaerobic_rando_set)
+    random_anaerobic_string = print_target_size_statistics('random_anaerobic', anaerobic_rando_gene_data)
+
+    print('\nSTATISTICS FOR A SET OF RANDOM GENES, THE SIZE OF AEROBIC GENE SET: ')
+    ## now print statistics for a random set of genes with the same length as the anaerobic genes.
+    aerobic_rando_set = choose_random_tags(gene_data,len(aerobic_gene_data[0]))
+    aerobic_random_csvfile = '../results/random-aerobic-set.csv'
+    print('printing random genes to:',aerobic_random_csvfile)
+    print_random_gene_csv(aerobic_rando_set,gene_data, aerobic_random_csvfile)
+    aerobic_rando_gene_data = filter_gene_data(gene_data,aerobic_rando_set)
+    random_aerobic_string = print_target_size_statistics('random_aerobic', aerobic_rando_gene_data)    
+
+    strings_to_write = [anaerobic_string, aerobic_string, random_anaerobic_string, random_aerobic_string, total_genome_string]
+
+    statoutf = '../results/target_size.csv'
+    print('writing statistics for aerobic-anaerobic-metagenomics.R to:',statoutf)
+    write_stats_to_file(statoutf, strings_to_write)
     
