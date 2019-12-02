@@ -59,6 +59,18 @@ filter(checkme>1)
 ## filter those duplicates.
 full.mutation.data <- filter(full.mutation.data, !(Gene %in% duplicate.genes$Gene))
 
+####### Constants. REVAMP THIS CODE!
+## from measureIntergenicTargetSize.py:
+## Length of intergenic regions: 487863
+intergenic.length <- 487863
+
+## from aerobic-anaerobic-genomics.R: ########
+######################NOTE: DOUBLE CHECK CONSISTENT WITH measureTargetSize.py. output!!!!!
+
+anaerobic.gene.length <- 457593
+aerobic.gene.length <- 219286
+
+
 ########################################################################
 ## investigate dS across the genome in the metagenomics data.
 ## revamp code from my 2015 Mol. Biol. Evol. paper.
@@ -354,16 +366,6 @@ median.mutation.data <- filter(full.mutation.data,Gene %in% median.genes)
 median.gene.length <- sum(median.mutation.data$gene_length)
 c.median.mutations <- calc.cumulative.muts(median.mutation.data,median.gene.length)
 
-## from measureIntergenicTargetSize.py:
-## Length of intergenic regions: 487863
-intergenic.length <- 487863
-
-## from aerobic-anaerobic-genomics.R: ########
-######################NOTE: DOUBLE CHECK CONSISTENT WITH measureTargetSize.py. output!!!!!
-
-anaerobic.gene.length <- 457593
-aerobic.gene.length <- 219286
-
 ## TODO: check difference between normalizing by gene length and normalizing
 ## by synonymous/nonsynonymous opportunities. The end result should be very similar.
 ## Then consider refactoring to just use REL606_IDs.csv to get gene lengths.
@@ -418,6 +420,24 @@ calc.cumulative.muts <- function(data, normalization.constant) {
   mutate(normalized.cs=cs/normalization.constant)
 }
 
+#################################################
+## Examine the distribution of various classes of mutations across genes in the
+## genomics or metagenomics data. Which genes are enriched? Which genes are depleted?
+## Then, can look at the annotation of these genes in STRING.
+calc.gene.mutation.density <- function(full.mutation.data, mut_type_vec) {
+    density.df <- full.mutation.data %>%
+        filter(Annotation %in% mut_type_vec) %>%
+        filter(Gene!= "intergenic") %>%
+        mutate(Gene=as.factor(Gene)) %>%
+        group_by(Gene,gene_length) %>%
+        summarize(mut.count=n()) %>%
+        ungroup() %>%
+        mutate(density=mut.count/gene_length) %>%
+        arrange(desc(mut.count))
+    return(density.df)
+}
+
+
 intergenic.mutation.data <- filter(full.mutation.data, Gene=='intergenic')
 intergenic.point.mutation.data <- filter(intergenic.mutation.data,Annotation=='noncoding')
 
@@ -458,19 +478,6 @@ right.tail.length <- sum(filter(REL606.genes,gene %in% right.tail.genes)$length,
 ## Let's first look at distribution of SV and indels across genes in the
 ## metagenomics data. Which genes are enriched? Which genes are depleted?
 ## Then, look at the annotation of these genes in STRING.
-
-calc.gene.mutation.density <- function(full.mutation.data, mut_type_vec) {
-    density.df <- full.mutation.data %>%
-        filter(Annotation %in% mut_type_vec) %>%
-        filter(Gene!= "intergenic") %>%
-        mutate(Gene=as.factor(Gene)) %>%
-        group_by(Gene,gene_length) %>%
-        summarize(mut.count=n()) %>%
-        ungroup() %>%
-        mutate(density=mut.count/gene_length) %>%
-        arrange(desc(mut.count))
-    return(density.df)
-}
 
 sv.mutation.density <- calc.gene.mutation.density(full.mutation.data,c("sv"))
 indel.mutation.density <- calc.gene.mutation.density(full.mutation.data,c("indel"))
@@ -516,16 +523,86 @@ wilcox.test(x=filter(purifying1,maybe.purifying==TRUE)$Score,filter(purifying1,m
 wilcox.test(x=filter(purifying2,maybe.purifying==TRUE)$Score,filter(purifying2,maybe.purifying==FALSE)$Score)
 
 #################################################
-## Now let's look at the accumulation of these mutations in each population.
+## Now let's look at the accumulation of sv, indels, and nonsense mutations
+## in each population.
 
-sv.mutation.data <- filter(full.mutation.data,Annotation=="sv")
-indel.mutation.data <- filter(full.mutation.data,Annotation=="indel")
+sv.indel.nonsense.mutation.data <- mutation.data %>%
+    filter(Annotation %in% c("sv", "indel", "nonsense"))
+
+c.sv.indel.nonsense.mutations <- calc.cumulative.muts(sv.indel.nonsense.mutation.data,total.length)
+
+aerobic.sv.indel.nonsense.muts <- mutation.data %>%
+    filter(aerobic==TRUE) %>%
+    filter(Annotation %in% c("sv", "indel", "nonsense"))
+
+c.aerobic.sv.indel.nonsense.mutations <- calc.cumulative.muts(aerobic.sv.indel.nonsense.muts,aerobic.gene.length)
+
+anaerobic.sv.indel.nonsense.muts <- mutation.data %>%
+    filter(anaerobic==TRUE) %>%
+    filter(Annotation %in% c("sv", "indel", "nonsense"))
+
+c.anaerobic.sv.indel.nonsense.mutations <- calc.cumulative.muts(anaerobic.sv.indel.nonsense.muts,anaerobic.gene.length)
+
+plot.sv.indel.nonsense.muts <- function(mut.data,logscale=TRUE) {
+    if (logscale) {
+        p <- ggplot(mut.data,aes(x=Generation,y=log(normalized.cs)))
+    } else {
+        p <- ggplot(mut.data,aes(x=Generation,y=normalized.cs))
+    }
+    p <- p +
+        theme_classic() +
+        geom_point(size=0.2) +
+        facet_wrap(.~Population,scales='fixed') +
+        ylab('Cumulative number of mutations, normalized by target size') +
+        xlab('Generations (x 10,000)')
+    return(p)
+}
+
+c.sv.indel.nonsense.plot <- plot.sv.indel.nonsense.muts(c.sv.indel.nonsense.mutations)
+c.sv.indel.nonsense.plot <- plot.sv.indel.nonsense.muts(c.sv.indel.nonsense.mutations,logscale=FALSE)
+c.sv.indel.nonsense.plot
+
+plot.aerobic.vs.anaerobic.sv.indel.nonsense.muts <- function(aerobic.data,anaerobic.data,all.data,logscale=TRUE) {
+    if (logscale) {
+        p <- ggplot(aerobic.data,aes(x=Generation,y=log(normalized.cs))) +
+            geom_point(size=0.2) +
+            geom_step(size=0.2) +
+            facet_wrap(.~Population,scales='fixed') +
+            geom_point(data=anaerobic.data,aes(x=Generation,y=log(normalized.cs)),color='red',size=0.2) +
+            geom_step(data=anaerobic.data,aes(x=Generation,y=log(normalized.cs)),color='red',size=0.2) +
+            geom_point(data=all.data,aes(x=Generation,y=log(normalized.cs)),color='grey',size=0.2) +
+            geom_step(data=all.data,aes(x=Generation,y=log(normalized.cs)),color='grey',size=0.2)
+    } else {
+        p <- ggplot(aerobic.data,aes(x=Generation,y=normalized.cs)) +
+            geom_point(size=0.2) +
+            geom_step(size=0.2) +
+            facet_wrap(.~Population,scales='fixed') +
+            geom_point(data=anaerobic.data,aes(x=Generation,y=normalized.cs),color='red',size=0.2) +
+            geom_step(data=anaerobic.data,aes(x=Generation,y=normalized.cs),color='red',size=0.2) +
+            geom_point(data=all.data,aes(x=Generation,y=normalized.cs),color='grey',size=0.2) +
+            geom_step(data=all.data,aes(x=Generation,y=normalized.cs),color='grey',size=0.2)    
+    }
+    p <- p +
+        theme_classic() +
+        ylab('Cumulative number of mutations, normalized by target size') +
+        xlab('Generations (x 10,000)')
+}
+
+aerobic.anaerobic.purifying.plot1 <- plot.aerobic.vs.anaerobic.sv.indel.nonsense.muts(c.aerobic.sv.indel.nonsense.mutations,c.anaerobic.sv.indel.nonsense.mutations,c.sv.indel.nonsense.mutations)
+
+aerobic.anaerobic.purifying.plot1
+
+aerobic.anaerobic.purifying.plot2 <- plot.aerobic.vs.anaerobic.sv.indel.nonsense.muts(c.aerobic.sv.indel.nonsense.mutations,c.anaerobic.sv.indel.nonsense.mutations,c.sv.indel.nonsense.mutations, logscale=FALSE)
+
+aerobic.anaerobic.purifying.plot2
 
 
 #################################################
 #### let's slice aerobic and anaerobic mutations in different ways.
 
-aerobic.mutation.data <- filter(full.mutation.data,aerobic==TRUE)
+    ## NOTE!!! full.mutation.data REMOVES all intergenic mutations!!!
+    ## have to use mutation.data! Change variable names to avoid this confusion!!!
+aerobic.mutation.data <- filter(mutation.data,aerobic==TRUE)
 aerobic.dN.mutation.data <- filter(aerobic.mutation.data,
                                    Annotation=='missense')
 aerobic.dS.mutation.data <- filter(aerobic.mutation.data,
@@ -535,7 +612,7 @@ aerobic.sv.mutation.data <- filter(aerobic.mutation.data,
 aerobic.indel.mutation.data <- filter(aerobic.mutation.data,
                                    Annotation=='indel')
 
-anaerobic.mutation.data <- filter(full.mutation.data,anaerobic==TRUE)
+anaerobic.mutation.data <- filter(mutation.data,anaerobic==TRUE)
 anaerobic.dN.mutation.data <- filter(anaerobic.mutation.data,
                                      Annotation=='missense')
 anaerobic.dS.mutation.data <- filter(anaerobic.mutation.data,
@@ -672,6 +749,27 @@ plot.aerobic.vs.anaerobic.sv.indels <- function(aerobic.sv,aerobic.indels,anaero
 }
 
 c.sv.indels.plot <- plot.aerobic.vs.anaerobic.sv.indels(c.aerobic.sv.mutations, c.aerobic.indel.mutations,c.anaerobic.sv.mutations,c.anaerobic.indel.mutations)
+
+
+plot.aerobic.vs.anaerobic.sv.indels <- function(aerobic.sv.indels,anaerobic.sv.indels) {
+  ggplot(aerobic.sv,aes(x=Generation,y=log(normalized.cs))) +
+      theme_classic() +
+      geom_point(size=0.2) +
+      geom_step(size=0.2) +
+      facet_wrap(.~Population,scales='fixed') +
+      geom_point(data=anaerobic.sv,aes(x=Generation,y=log(normalized.cs)),color='red',size=0.2) +
+      geom_step(data=anaerobic.sv,aes(x=Generation,y=log(normalized.cs)),color='red',size=0.2) +
+      geom_point(data=aerobic.indels,aes(x=Generation,y=log(normalized.cs)),color='purple',size=0.2) +
+      geom_step(data=aerobic.indels,aes(x=Generation,y=log(normalized.cs)),color='purple',size=0.2) +
+      geom_step(data=aerobic.indels,aes(x=Generation,y=log(normalized.cs)),color='purple',size=0.2) +
+  geom_step(data=anaerobic.indels,aes(x=Generation,y=log(normalized.cs)),color='green',size=0.2) +
+  ylab('Cumulative number of mutations, normalized by target size') +
+  xlab('Generations (x 10,000)')
+}
+
+c.sv.indels.plot <- plot.aerobic.vs.anaerobic.sv.indels(c.aerobic.sv.mutations, c.aerobic.indel.mutations,c.anaerobic.sv.mutations,c.anaerobic.indel.mutations)
+
+
 
 
 plot.aerobic.vs.anaerobic.muts <- function(aerobic.data,anaerobic.data,all.data) {
@@ -1021,3 +1119,4 @@ write.csv(full.mutation.data, "../results/full-LTEE-metagenomic-mutations.csv")
 ## TODO: infer cohorts using Haixu Tang's new algorithm.
 ## Then ask whether cohorts show functional enrichment using
 ## STRING annotation.
+
