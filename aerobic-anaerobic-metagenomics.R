@@ -7,13 +7,22 @@
 ## count the cumulative number of stars over time, and plot.
 ## examine different kinds of mutations and genes.
 
-## can I control for total number of mutations? Include as a predictor or something?
+## MAKE SURE THAT ZEROS IN MUTATION COUNTS ARE NOT THROWN OUT BY DPLYR!
+
+## TODO: infer cohorts using Haixu Tang's new algorithm.
+## Then ask whether cohorts show functional enrichment using
+## STRING annotation.
 
 library(tidyverse)
-
 ##########################################################################
-## get the lengths of all genes in REL606. Do by running:
-## python printEcoliIDs.py -i ../data/REL606.7.gbk > ../results/REL606_IDs.csv.
+
+## get the lengths of all genes in REL606.
+## This excludes genes in repetitive regions of the genome.
+## See Section 4.3.1 "Removing mutations in repetitive regions of the genome"
+## in Ben Good's LTEE metagenomics paper for more details.
+## This filtering is done in my python script printEcoliIDs.py.
+##Do by running:
+##python printEcoliIDs.py -i ../data/REL606.7.gbk > ../results/REL606_IDs.csv.
 REL606.genes <- read.csv('../results/REL606_IDs.csv',as.is=TRUE) %>%
 mutate(gene_length=strtoi(gene_length))
 
@@ -50,101 +59,12 @@ filter(checkme>1)
 ## filter those duplicates.
 full.mutation.data <- filter(full.mutation.data, !(Gene %in% duplicate.genes$Gene))
 
-
-##########################################################################
-## look at mutations in the metagenomics dataset that occur
-## in arcA binding sites.
-get.arcA.motif.muts <- function(arcA.binding.sites,mutation.data) {
-
-  filter.arcA.motif.muts <- function(arcA.motif) {
-    arcA.motif.muts <- mutation.data %>%
-    filter(Position >= arcA.motif$REL606_start) %>%
-    filter(Position <= arcA.motif$REL606_end)
-    return(arcA.motif.muts)
-  }
-  
-  ## split arcA.binding.sites on each row, then filter mutation.data on those
-  ## coordinates as output, then join those dataframes.
-  arcA.motif.mutations <- arcA.binding.sites %>%
-  droplevels() %>% ## don't map/reduce empty subsets
-  split(.$K12_arcA_motif) %>%
-  map_dfr(.f=filter.arcA.motif.muts)
-
-  return(arcA.motif.mutations)
-}
-
-arcA.binding.sites <- read.csv('../results/K12_arcA_motifs_in_REL606.csv',as.is=TRUE)
-arcA.motif.mutations <- get.arcA.motif.muts(arcA.binding.sites,mutation.data)
-arcA.motif.fixations <- filter(arcA.motif.mutations,fixation==1)
-## write out a table for Nkrumah.
-write.csv(file='../results/LTEE_metagenome_arcA_motif_mutations.csv',arcA.motif.mutations)
-##########################################################################
-## calculate the probability of a given configuration of parallel mutations
-## in the metagenomes across populations.
-## This seems to be a neat test for positive selection!
-## Seems to give the same answer as results in Tenaillon Nature paper,
-## and unfortunately not effective for historical contingency per se.
-
-## Keep this code for now, in case I get some idea that builds on this.
-gene.multinom.probability <- function (mutation.data,gene,logp=TRUE,dS=FALSE) {
-  population.probs <- mutation.data %>% group_by(Population) %>%
-  summarize(total.muts=n()) %>% mutate(prob=total.muts/sum(total.muts))
-
-  if (dS) {
-      gene.data <- filter(mutation.data,Gene==gene,Annotation=='synonymous')
-  } else {
-      gene.data <- filter(mutation.data,Gene==gene,Annotation=='missense')
-  }
-
-  ## if no mutations, return NA.
-  if (nrow(gene.data) == 0) return(NA)
-  
-  gene.data.counts <- gene.data %>% group_by(Population) %>%
-  summarize(muts=n())
-
-  ## hack to get lengths of vector right for dmultinom.
-  full.pop.column <- data.frame(Population=population.probs$Population)
-  stat.df <- full_join(full.pop.column,gene.data.counts)
-  stat.df[is.na(stat.df)] <- 0
-
-  dmultinom(stat.df$muts, size = sum(stat.df$muts), prob=population.probs$prob, log = logp)
-}
-
-## look at a couple genes for a sanity check.
-gene.multinom.probability(mutation.data,'arcB',FALSE)
-gene.multinom.probability(mutation.data,'hslU',FALSE)
-
-## draw every gene in the genome. calculate log probability and rank.
-genes.vec <- unique(mutation.data$Gene)
-dN.prob.vec <- sapply(genes.vec,function(gene) {gene.multinom.probability(mutation.data,gene)})
-dS.prob.vec <- sapply(genes.vec,function(gene) {gene.multinom.probability(mutation.data,gene,dS=TRUE)})
-
-multinom.result <- data.frame(Gene=genes.vec,dN.Prob=dN.prob.vec,dS.Prob=dS.prob.vec) %>% drop_na() %>%
-arrange(dN.Prob) %>% mutate(index=1:n()) %>%
-mutate(anaerobic=(Gene %in% anaerobic.genes$gene)) %>%
-mutate(aerobic=(Gene %in% aerobic.genes$gene))
-
-## how much is this result related to the number of mutations in each gene?
-## Control for gene length, and see if there's a correlation between log(p)
-## and density of mutations in each gene.
-## there's a super strong relationship. p < 2.26e-16.
-
-## just rank gene.mutation.density to see what it looks like!
-## maybe this is already a good indication of selection.
-gene.mutation.density <- full.mutation.data %>%
-filter(Gene!='intergenic') %>%
-group_by(Gene) %>%
-summarize(density=n()/unique(gene_length)) %>%
-arrange(desc(density))
-
-multinom.result.and.density <- inner_join(gene.mutation.density,multinom.result)
-cor.test(multinom.result.and.density$density,multinom.result.and.density$Prob)
-
 ########################################################################
 ## investigate dS across the genome in the metagenomics data.
-## reuse code from my 2015 Mol. Biol. Evol. paper.
+## revamp code from my 2015 Mol. Biol. Evol. paper.
+## in short, cannot reject null model that dS is uniform over the genome.
 
-ks.analysis <- function (the.data) {
+ks.analysis <- function (the.data,REL606.genes) {
   ## For each set of data (all data, non-mutators, MMR mutators, mutT mutators)
   ## do the following: 1) make a uniform cdf on mutation rate per base.
   ## 2) make a thetaS cdf. 3) make an empirical cdf of mutations per gene.
@@ -152,18 +72,20 @@ ks.analysis <- function (the.data) {
   ## the uniform cdf and thetaS cdf hypotheses.
 
   hit.genes.df <- the.data %>%
-  group_by(Gene,locus_tag,gene_length) %>%
+  group_by(locus_tag,Gene,gene_length) %>%
   summarize(hits=n()) %>%
-  ungroup() %>%
+  ungroup()
+
+  ## have to do it this way, so that zeros are included.
+  hit.genes.df <- full_join(REL606.genes,hit.genes.df) %>% replace_na(list(hits=0)) %>%
   arrange(desc(gene_length))
-  
-  hit.genes.length <- sum(hit.genes.df$gene_length)
-  
+    
   ## Calculate the empirical distribution of synonymous substitutions per gene.
+  hit.genes.length <- sum(hit.genes.df$gene_length)
   mutation.total <- sum(hit.genes.df$hits)
   empirical.cdf <- cumsum(hit.genes.df$hits)/mutation.total
   ## Null hypothesis: probability of a mutation per base is uniform.
-  null.cdf <- cumsum(hit.genes.df$gene_length)/hit.genes.length)
+  null.cdf <- cumsum(hit.genes.df$gene_length)/hit.genes.length
 
   ## Do Kolmogorov-Smirnov tests for goodness of fit.
   print(ks.test(empirical.cdf, null.cdf, simulate.p.value=TRUE))
@@ -173,112 +95,232 @@ ks.analysis <- function (the.data) {
   return(results.to.plot)
 }
 
-make.KS.Figure <- function(the.results.to.plot) {
-## This function generates the first panel that I want
-## but not with synonymous substitution rates in the LTEE.
-  
-  ## for plotting convienence, add an index to the data frame.
-  the.results.to.plot$index <- 1:length(the.results.to.plot$gene)
+make.KS.Figure <- function(the.results.to.plot) { 
+  ## for plotting convenience, add an index to the data frame.
+  the.results.to.plot$index <- 1:length(the.results.to.plot$locus_tag)
   
   plot <- ggplot(the.results.to.plot, aes(x=index)) +
     geom_line(aes(y=empirical), colour="red") + 
     geom_line(aes(y=null), linetype=2) + 
-    scale_x_continuous('Genes ranked by length',limits=c(0,2900)) +
-    scale_y_continuous('Cumulative proportion of synonymous mutations',limits=c(0,1)) +
+    scale_x_continuous('Genes ranked by length',limits=c(0,4400)) +
+    scale_y_continuous('Cumulative proportion of mutations',limits=c(0,1)) +
       theme_classic() + theme(axis.title=element_text(size=18),axis.text=element_text(size=12))
   plot
-  
 }
 
+## examine all mutations over the genome.
+cumsum.all.over.metagenome <- ks.analysis(full.mutation.data,REL606.genes)
+make.KS.Figure(cumsum.all.over.metagenome)
+
+## examine structural mutations (IS elements.)
+full.sv.mutation.data <- full.mutation.data %>%
+filter(Gene!='intergenic') %>%
+filter(Annotation=='sv')
+
+## RESULT: longer genes are depleted in IS insertions!!
+cumsum.sv.over.metagenome <- ks.analysis(full.sv.mutation.data,REL606.genes)
+make.KS.Figure(cumsum.sv.over.metagenome)
+
+## examine indels.
+full.indel.mutation.data <- full.mutation.data %>%
+filter(Gene!='intergenic') %>%
+filter(Annotation=='indel')
+
+## RESULT: longer  genes are depleted in indels!
+cumsum.indel.over.metagenome <- ks.analysis(full.indel.mutation.data,REL606.genes)
+make.KS.Figure(cumsum.indel.over.metagenome)
+
+## Therefore, IS and structural mutations are probably what are driving the
+## differences that I saw in aerobic and anerobic mutations before.
+
+## examine dS over the genome.
 full.dS.mutation.data <- full.mutation.data %>%
 filter(Gene!='intergenic') %>%
 filter(Annotation=='synonymous')
 
-## dS mutations occurring in metagenomics don't fall uniformly over the genome!
-cumsum.dS.over.metagenome <- ks.analysis(full.dS.mutation.data)
+## in fact-- trend is toward more dS than expected in longer genes.
+## (but not significant).
+## HYPOTHESIS TODO: related to gene transcription?
+## but doesn't look like enough data for significance.
+cumsum.dS.over.metagenome <- ks.analysis(full.dS.mutation.data,REL606.genes)
 make.KS.Figure(cumsum.dS.over.metagenome)
 
+## cross-check these results with 50K genomes.
+all.50K.mutations <- read.csv("../data/Gen50000_allMutations.csv",
+                              header=TRUE,
+                              as.is=TRUE) %>%
+    filter(clone=='A') %>%
+    rename(Gene=gene_name) %>%
+    inner_join(REL606.genes) %>%
+    filter(Gene!='intergenic')
 
-## cross check with dS in the mutator 50K genomes.
-mutator.50K <- read.csv('../data/Gen50000_M.csv',header=TRUE,stringsAsFactors=FALSE) %>%
-  select(population,strain,clone,mutator_status,type,start_position,end_position,gene_position,
-         locus_tag,mutation_category,snp_type) %>% filter(clone=='A')
+## cross-check with dS in 50K genomes.
+dS.50K <- filter(all.50K.mutations, snp_type=='synonymous')
+cumsum.dS.genome.50K <- ks.analysis(dS.50K,REL606.genes)
+make.KS.Figure(cumsum.dS.genome.50K)
 
-genome.colnames.to.metagenome.colnames <- function(genome.data) {
-  renamed <- genome.data %>% rename(Population=population,
-                                    Locus_tag = locus_tag)
-  return(renamed)
+## cross-check with everything except dS in 50K genomes.
+no.dS.50K <- filter(all.50K.mutations, snp_type!='synonymous')
+cumsum.no.dS.genome.50K <- ks.analysis(no.dS.50K,REL606.genes)
+make.KS.Figure(cumsum.no.dS.genome.50K)
+
+## cross-check with dN in 50K genomes.
+dN.50K <- filter(all.50K.mutations, snp_type!='nonsynonymous')
+cumsum.dN.genome.50K <- ks.analysis(dN.50K,REL606.genes)
+make.KS.Figure(cumsum.dN.genome.50K)
+
+## cross-check IS elements in the 50K genomes.
+IS.50K <- filter(all.50K.mutations, mutation_category=="mobile_element_insertion")
+cumsum.IS.genome.50K <- ks.analysis(IS.50K,REL606.genes)
+make.KS.Figure(cumsum.IS.genome.50K)
+
+## cross-check indels in the 50K genomes.
+indels.50K <- filter(all.50K.mutations, mutation_category=="small_indel")
+cumsum.indels.genome.50K <- ks.analysis(indels.50K,REL606.genes)
+make.KS.Figure(cumsum.indels.genome.50K)
+
+## cross-check nonsense SNPs in the 50K genomes.
+## OPPOSITE trend!!! More nonsense mutations in big genes.
+nonsense.50K <- filter(all.50K.mutations, mutation_category=="snp_nonsense")
+cumsum.nonsense.genome.50K <- ks.analysis(nonsense.50K,REL606.genes)
+make.KS.Figure(cumsum.nonsense.genome.50K)
+
+## large deletions in 50K genomes.
+largedeletions.50K <- filter(all.50K.mutations, mutation_category=="large_deletion")
+cumsum.largedeletions.genome.50K <- ks.analysis(largedeletions.50K,REL606.genes)
+make.KS.Figure(cumsum.largedeletions.genome.50K)
+
+## let's look at all mutations except for dS as a comparison.
+full.except.dS.mutation.data <- full.mutation.data %>%
+filter(Gene!='intergenic') %>%
+filter(Annotation!='synonymous')
+
+cumsum.no.dS.over.metagenome <- ks.analysis(full.except.dS.mutation.data,REL606.genes)
+make.KS.Figure(cumsum.no.dS.over.metagenome)
+
+full.dN.mutation.data <- full.mutation.data %>%
+filter(Gene!='intergenic') %>%
+filter(Annotation=='missense')
+
+cumsum.dN.over.metagenome <- ks.analysis(full.dN.mutation.data,REL606.genes)
+make.KS.Figure(cumsum.dN.over.metagenome)
+
+## Looks like there's a significant difference between dS and non-dS
+## distribution over the genome?
+## and dN actually has the closest fit to the gene length null hypothesis?
+## Yes: p = 6.167e-05. I feel I found this by fishing... but still
+## significant by Bonferroni correcting by the different graphs I made.
+## Best guess: due to mutation hotspots for indels and IS elements.
+ks.test(cumsum.dS.over.metagenome$empirical,
+        cumsum.no.dS.over.metagenome$empirical,
+        simulate.p.value=TRUE)
+
+## but this test is not significant in comparing dS to dN.
+## so driven by distribution of non-point mutations over the genome,
+## since I excluded intergenic mutations.
+ks.test(cumsum.dS.over.metagenome$empirical,
+        cumsum.dN.over.metagenome$empirical,
+        simulate.p.value=TRUE)
+
+## look at structural variation. can I distinguish between
+## mutation hotspots vs. selection?
+## Right now, I don't think I can.
+
+## The dynamics of mutations under relaxed selection should be
+## dragged by mutations under positive selection.
+## Also see Ville Mustonen's paper on 'emergent neutrality'.
+## so a better null hypothesis: dynamics of ALL mutations are driven by
+## positive selection, either as hitchhikers or as drivers.
+
+## Does the Ornstein-Uhlenbeck process require that effects of each
+## mutation is uncorrelated? If mutations affecting anaerobic fitness
+## are uncorrelated with mutations affecting aerobic fitness,
+## then would this Genotype-Phenotype Map be inconsistent
+## with Nkrumah's results?
+
+##########################################################################
+## calculate the probability of a given configuration of parallel mutations
+## in the metagenomes across populations.
+## This seems to be a neat test for positive selection!
+## Seems to give the same answer as results in Tenaillon Nature paper.
+## TODO: compare to Supplementary Table S3 in Good et al. Nature paper.
+
+library('DescTools')
+
+gene.multinom.probability <- function (mutation.data,gene,logp=FALSE,dS=FALSE) {
+  population.probs <- mutation.data %>% group_by(Population) %>%
+  summarize(total.muts=n()) %>% mutate(prob=total.muts/sum(total.muts))
+
+  if (dS) {
+      gene.data <- filter(mutation.data,Gene==gene,Annotation=='synonymous')
+  } else {
+      gene.data <- filter(mutation.data,Gene==gene,Annotation=='missense')
+  }
+  
+  gene.data.counts <- gene.data %>% group_by(Population) %>%
+  summarize(muts=n())
+
+  if(nrow(gene.data.counts) == 0) return(NA)
+  
+  ## hack to get lengths of vector right for dmultinom.
+  full.pop.column <- data.frame(Population=population.probs$Population,
+                                stringsAsFactors=FALSE)
+  stat.df <- full_join(full.pop.column,gene.data.counts,by='Population')
+  stat.df[is.na(stat.df)] <- 0
+
+  ## An exact multinomial test is too slow.
+  ## Use a G-test instead from the DescTools package.
+  GTest(x=stat.df$muts, p=population.probs$prob)$p.value
+  ##dmultinom(stat.df$muts, size = sum(stat.df$muts), prob=population.probs$prob, log = logp)
 }
 
+## draw every gene in the genome. calculate log probability and rank.
+genes.vec <- unique(REL606.genes$Gene)
+dN.pval.vec <- sapply(genes.vec,function(gene) {gene.multinom.probability(full.mutation.data,gene)})
+dS.pval.vec <- sapply(genes.vec,function(gene) {gene.multinom.probability(full.mutation.data,gene,dS=TRUE)})
 
-mutator.50K.dS <- filter(mutator.50K,snp_type=='synonymous') %>%
-genome.colnames.to.metagenome.colnames %>%
-left_join(full.mutation.data)
+multinom.result <- data.frame(Gene=genes.vec,dN.pvalue=dN.pval.vec,dS.pvalue=dS.pval.vec) %>% drop_na() %>%
+arrange(dN.pvalue) %>% mutate(index=1:n()) %>%
+mutate(anaerobic=(Gene %in% anaerobic.genes$gene)) %>%
+mutate(aerobic=(Gene %in% aerobic.genes$gene)) %>%
+mutate(dS.qvalue=p.adjust(dS.pvalue,'fdr')) %>%
+mutate(dN.qvalue=p.adjust(dN.pvalue,'fdr'))
 
-cumsum.dS.over.genome <- ks.analysis(mutator.50K.dS)
-## FASCINATING!!! Looks like dS is not neutral in the
-## genomes either!!
+## interesting! cpsG is significant in terms of dS!
+significant.dS <- filter(multinom.result,dS.pvalue<0.05)
 
-make.KS.Figure(cumsum.dS.over.genome)
+## most of these genes are already known. Some aren't 
+significant.dN <- filter(multinom.result,dN.pvalue<0.05)
 
-## IMPORTANT TODO: Double-check with the 50K and 40K genomes too, to see whether
-## this result is due to a bug in my code somewhere!
+## look at genes which are significant based on this test, but
+## not based on parallelism alone, from Ben Good Table S3.
+## these may be candidates for contingency.
+Good.significant.genes <- read.csv('../ltee-metagenomics-paper/nature24287-s5.csv.txt')
 
-mutator.40K <- read.csv('../data/Gen40000_M.csv',header=TRUE,as.is=TRUE) %>%
-  select(population,strain,clone,mutator_status,type,start_position,end_position,gene_position,
-         locus_tag,mutation_category,snp_type) %>% filter(clone=='A')
+contingency.candidates <- filter(significant.dN,!(Gene %in% Good.significant.genes$Gene))
+## of these genes, hflB, rpoB, topA are in the Tenaillon top G-scoring
+## genes. The rest are marginally significant.
+## worth querying these genes (and the significant dS gene!)
+## in the Good metagenomic data to see if there's anything
+## interesting.
 
+## how much is this result related to the number of mutations in each gene?
+## Control for gene length, and see if there's a correlation between log(p)
+## and density of mutations in each gene.
+## there's a super strong relationship. p < 2.26e-16.
 
-### do the same KS.test, but a different way to double-check.
-second.test <- mutator.50K.dS %>% genome.colnames.to.metagenome.colnames %>%
-group_by(Locus_tag) %>% summarize(dS.count=n()) %>%
-inner_join(select(cumsum.dS.over.metagenome,Locus_tag=locus_tag,Gene=Gene,gene_length=gene_length)) %>%
-arrange(gene_length) %>%
-mutate(index=1:n()) %>%
-mutate(dS.density=dS.count/gene_length) %>%
-mutate(empirical=cumsum(dS.count)/sum(dS.count)) %>%
-mutate(null=cumsum(gene_length)/sum(gene_length))
+## just rank gene.mutation.density to see what it looks like!
+## this is already a good indication of selection,
+## and this is pretty much what Ben Good does in his Table S3.
+gene.mutation.density <- full.mutation.data %>%
+filter(Gene!='intergenic') %>%
+group_by(Gene) %>%
+summarize(density=n()/unique(gene_length)) %>%
+arrange(desc(density))
 
+multinom.result.and.density <- inner_join(gene.mutation.density,multinom.result)
+cor.test(multinom.result.and.density$density,multinom.result.and.density$Prob)
 
-
-genome.dS.density.plot <- ggplot(second.test,aes(x=index,y=dS.density,label=Gene)) +
-geom_point() +
-theme_classic()
-
-genome.dS.KS.plot <- ggplot(second.test,aes(x=index)) +
-    geom_line(aes(y=empirical), colour="red") + 
-    geom_line(aes(y=null), linetype=2) + 
-    scale_x_continuous('Genes ranked by length',limits=c(0,2900)) +
-    scale_y_continuous('Cumulative proportion of synonymous mutations',limits=c(0,1)) +
-      theme_classic() + theme(axis.title=element_text(size=18),axis.text=element_text(size=12))
-genome.dS.KS.plot
-## This plot 
-
-
-## This means that the dynamics of mutations under relaxed selection should be
-## dragged by mutations under positive selection.
-
-## Does the Ornstein-Uhlenbeck process require that effects of each mutation is uncorrelated?
-## If mutations affecting anaerobic fitness are uncorrelated with mutations affecting
-## aerobic fitness, does this 
-
-## Genotype-Phenotype Map
-
-## new null hypothesis: dynamics of ALL mutations are driven by positive selection.
-## either hitchhiking or as a driver.
-
-
-################################################################ EDITING HERE!
-
-## are dS mutations concentrated in a few genes? Based on my 2015 paper, I expect a uniform
-## distribution, after normalizing by gene length. Does the null for genomes work for
-## the metagenome?
-
-dS.mutation.density <- full.dS.mutation.data %>%
-group_by(Gene,gene_length) %>%
-summarize(dS.count=n()) %>%
-ungroup() %>%
-mutate(density=dS.count/gene_length)
 
 dN.mutation.density <- full.mutation.data %>%
 filter(Gene!='intergenic') %>%
@@ -287,31 +329,6 @@ group_by(Gene,gene_length) %>%
 summarize(dN.count=n()) %>%
 ungroup() %>%
 mutate(density=dN.count/gene_length)
-
-synon.density.plot <- ggplot(filter(dS.mutation.density,dS.count>3),aes(x=gene_length,y=density,label=Gene)) +
-geom_point() +
-theme_classic()
-
-synon.count.plot <- ggplot(dS.mutation.density,aes(x=gene_length,y=dS.count,label=Gene,group=dS.count)) +
-##geom_point() +
-geom_violin() +
-theme_classic()
-
-dN.density.plot <- ggplot(filter(dN.mutation.density,dN.count>3),aes(x=gene_length,y=density,label=Gene)) +
-geom_point() +
-theme_classic()
-
-test.model <- lm(data=dS.mutation.density,formula=dS.count~gene_length+0)
-
-## don't know if this plot is informative or not...
-## interesting that the really short gene ECB_01628 has two
-## coexisting dS in Ara+6, but can't calculate significance post-hoc!
-## genes in the left hand of the tail tend to be quite short.
-synon.density.plot
-synon.count.plot
-
-##test <- full.mutation.data %>% filter(Gene=='ECB_01628')
-test <- full.mutation.data %>% filter(Gene=='pmrD')
 
 ## write to file.
 write.csv(multinom.result,file='../results/multinomial_test_for_selection.csv')
@@ -337,22 +354,13 @@ median.mutation.data <- filter(full.mutation.data,Gene %in% median.genes)
 median.gene.length <- sum(median.mutation.data$gene_length)
 c.median.mutations <- calc.cumulative.muts(median.mutation.data,median.gene.length)
 
-##########################################################################
-## REALLY DIRTY HACK TO GET A QUICK ANSWER!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-## (but use this idea for refactoring: feed in as input here?)
-##aerobic.genes <- random.aerobic.genes
-##anaerobic.genes <- random.anaerobic.genes
-
-####### END HACK !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
 ## from measureIntergenicTargetSize.py:
 ## Length of intergenic regions: 487863
 intergenic.length <- 487863
 
-## from ArcAnalysisScript.R: ########
+## from aerobic-anaerobic-genomics.R: ########
 ######################NOTE: DOUBLE CHECK CONSISTENT WITH measureTargetSize.py. output!!!!!
-## anaerobic-specific gene length: 457593
-## aerobic-specific gene length: 219286
+
 anaerobic.gene.length <- 457593
 aerobic.gene.length <- 219286
 
@@ -391,25 +399,6 @@ total.length <- filter(target.size.numbers,set=='genome')$total_gene_length
 total.synon.sites <- filter(target.size.numbers,set=='genome')$synon_sites
 total.nonsynon.sites <- filter(target.size.numbers,set=='genome')$non_synon_sites
 
-## DIRTY HACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
-##anaerobic.synon.sites <- random.anaerobic.synon.sites
-##anaerobic.nonsynon.sites <- random.anaerobic.nonsynon.sites
-##aerobic.synon.sites <- random.aerobic.synon.sites
-##aerobic.nonsynon.sites <- random.aerobic.nonsynon.sites
-
-##anaerobic.synon.sites <- random.anaerobic.length
-##aerobic.synon.sites <- random.aerobic.length
-##anaerobic.nonsynon.sites <- random.anaerobic.length
-##aerobic.nonsynon.sites <- random.aerobic.length
-##total.synon.sites <- total.length
-##total.nonsynon.sites <- total.length
-
-##anaerobic.gene.length <- random.anaerobic.length
-##aerobic.gene.length <- random.aerobic.length
-
-############# END HACK!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-
 ########################################
 ## look at accumulation of stars over time.
 ## in other words, look at the rates at which the mutations occur over time.
@@ -429,16 +418,8 @@ calc.cumulative.muts <- function(data, normalization.constant) {
   mutate(normalized.cs=cs/normalization.constant)
 }
 
-
-intergenic.mutation.data <- filter(mutation.data,
-                                   Gene=='intergenic')
-
+intergenic.mutation.data <- filter(full.mutation.data, Gene=='intergenic')
 intergenic.point.mutation.data <- filter(intergenic.mutation.data,Annotation=='noncoding')
-
-dN.mutation.data <- filter(mutation.data,
-                           Annotation=='missense')
-dS.mutation.data <- filter(mutation.data,
-                           Annotation=='synonymous')
 
 ## NOTE: rate of accumulation depends on the size of the gene set,
 ## when looking at the left and right tails.
@@ -472,13 +453,97 @@ left.tail2.length <- sum(filter(REL606.genes,gene %in% left.tail2.genes)$length,
 right.tail.length <- sum(filter(REL606.genes,gene %in% right.tail.genes)$length,na.rm=TRUE)
 
 
-aerobic.mutation.data <- filter(mutation.data,aerobic==TRUE)
-aerobic.dN.mutation.data <- filter(dN.mutation.data,aerobic==TRUE)
-aerobic.dS.mutation.data <- filter(dS.mutation.data,aerobic==TRUE)
+#################################################
+#################################################
+## Let's first look at distribution of SV and indels across genes in the
+## metagenomics data. Which genes are enriched? Which genes are depleted?
+## Then, look at the annotation of these genes in STRING.
 
-anaerobic.mutation.data <- filter(mutation.data,anaerobic==TRUE)
-anaerobic.dN.mutation.data <- filter(dN.mutation.data,anaerobic==TRUE)
-anaerobic.dS.mutation.data <- filter(dS.mutation.data,anaerobic==TRUE)
+calc.gene.mutation.density <- function(full.mutation.data, mut_type_vec) {
+    density.df <- full.mutation.data %>%
+        filter(Annotation %in% mut_type_vec) %>%
+        filter(Gene!= "intergenic") %>%
+        mutate(Gene=as.factor(Gene)) %>%
+        group_by(Gene,gene_length) %>%
+        summarize(mut.count=n()) %>%
+        ungroup() %>%
+        mutate(density=mut.count/gene_length) %>%
+        arrange(desc(mut.count))
+    return(density.df)
+}
+
+sv.mutation.density <- calc.gene.mutation.density(full.mutation.data,c("sv"))
+indel.mutation.density <- calc.gene.mutation.density(full.mutation.data,c("indel"))
+
+## get genes with no sv.
+no.sv.genes <- filter(REL606.genes, !(Gene %in% sv.mutation.density$Gene)) %>%
+    arrange(desc(gene_length))
+## get genes with no indels.
+no.indel.genes <- filter(REL606.genes, !(Gene %in% indel.mutation.density$Gene)) %>%
+    arrange(desc(gene_length))
+
+nonsense.indel.sv.density <- calc.gene.mutation.density(full.mutation.data,c("sv", "indel", "nonsense"))
+
+## IMPORTANT: EXAMINE GENES WITH ZERO INDEL, SV, NONSENSE MUTATIONS.
+## THESE ARE THE MOST DEPLETED.
+## THIS LOOKS REAL!!!
+no.nonsense.indel.sv.genes <- filter(REL606.genes, !(Gene %in% nonsense.indel.sv.density$Gene)) %>% arrange(desc(gene_length))
+write.csv(no.nonsense.indel.sv.genes,file="../results/no-nonsense-indel-sv-genes.csv")
+
+## Try again, now disallowing missense mutations.
+all.except.dS.density <- calc.gene.mutation.density(full.mutation.data,c("sv", "indel", "nonsense", "missense"))
+only.dS.allowed.genes <- filter(REL606.genes, !(Gene %in% all.except.dS.density$Gene)) %>% arrange(desc(gene_length))
+write.csv(only.dS.allowed.genes,file="../results/only-dS-allowed-genes.csv")
+
+
+## As an added confirmation, let's compare essentiality from KEIO collection to these
+## gene sets.
+KEIO.data <- read.csv("../data/KEIO_Essentiality.csv", header=TRUE,as.is=TRUE) %>%
+    select(-JW_id)
+
+purifying1 <- inner_join(REL606.genes, KEIO.data) %>% mutate(maybe.purifying=(Gene %in% no.nonsense.indel.sv.genes$Gene)) %>% filter(gene_length > 1000)
+
+purifying1.plot <- ggplot(purifying1,aes(x=maybe.purifying,y=Score)) + theme_classic() + geom_boxplot()
+purifying1.plot
+
+purifying2 <- inner_join(REL606.genes, KEIO.data) %>% mutate(maybe.purifying=(Gene %in% only.dS.allowed.genes$Gene))
+
+purifying2.plot <- ggplot(purifying2,aes(x=maybe.purifying,y=Score)) + theme_classic() + geom_boxplot()
+purifying2.plot
+
+## potentially purifying genes have a higher KEIO essentially score, as we would hope.
+wilcox.test(x=filter(purifying1,maybe.purifying==TRUE)$Score,filter(purifying1,maybe.purifying==FALSE)$Score)
+wilcox.test(x=filter(purifying2,maybe.purifying==TRUE)$Score,filter(purifying2,maybe.purifying==FALSE)$Score)
+
+#################################################
+## Now let's look at the accumulation of these mutations in each population.
+
+sv.mutation.data <- filter(full.mutation.data,Annotation=="sv")
+indel.mutation.data <- filter(full.mutation.data,Annotation=="indel")
+
+
+#################################################
+#### let's slice aerobic and anaerobic mutations in different ways.
+
+aerobic.mutation.data <- filter(full.mutation.data,aerobic==TRUE)
+aerobic.dN.mutation.data <- filter(aerobic.mutation.data,
+                                   Annotation=='missense')
+aerobic.dS.mutation.data <- filter(aerobic.mutation.data,
+                                   Annotation=='synonymous')
+aerobic.sv.mutation.data <- filter(aerobic.mutation.data,
+                                   Annotation=='sv')
+aerobic.indel.mutation.data <- filter(aerobic.mutation.data,
+                                   Annotation=='indel')
+
+anaerobic.mutation.data <- filter(full.mutation.data,anaerobic==TRUE)
+anaerobic.dN.mutation.data <- filter(anaerobic.mutation.data,
+                                     Annotation=='missense')
+anaerobic.dS.mutation.data <- filter(anaerobic.mutation.data,
+                                     Annotation=='synonymous')
+anaerobic.sv.mutation.data <- filter(anaerobic.mutation.data,
+                                   Annotation=='sv')
+anaerobic.indel.mutation.data <- filter(anaerobic.mutation.data,
+                                   Annotation=='indel')
 
 
 high.freq.dN.mutation.data <- filter(dN.mutation.data,final_frequency>0.8)
@@ -544,6 +609,15 @@ c.aerobic.mutations <- calc.cumulative.muts(aerobic.mutation.data,
 c.anaerobic.mutations <- calc.cumulative.muts(anaerobic.mutation.data,
                                               anaerobic.gene.length)
 
+c.aerobic.sv.mutations <- calc.cumulative.muts(aerobic.sv.mutation.data,
+                                            aerobic.gene.length)
+c.anaerobic.sv.mutations <- calc.cumulative.muts(anaerobic.sv.mutation.data,
+                                              anaerobic.gene.length)
+
+c.aerobic.indel.mutations <- calc.cumulative.muts(aerobic.indel.mutation.data,aerobic.gene.length)
+c.anaerobic.indel.mutations <- calc.cumulative.muts(anaerobic.indel.mutation.data,anaerobic.gene.length)
+
+
 c.aerobic.high.freq.dS.mutations <- calc.cumulative.muts(aerobic.high.freq.dS.mutation.data,
                                                          aerobic.synon.sites) 
 c.anaerobic.high.freq.dS.mutations <- calc.cumulative.muts(anaerobic.high.freq.dS.mutation.data,
@@ -584,6 +658,21 @@ c.anaerobic.dN.mutations <- calc.cumulative.muts(anaerobic.dN.mutation.data,
                                                  anaerobic.nonsynon.sites)
 c.anaerobic.dS.mutations <- calc.cumulative.muts(anaerobic.dS.mutation.data,
                                                  anaerobic.synon.sites)
+
+plot.aerobic.vs.anaerobic.sv.indels <- function(aerobic.sv,aerobic.indels,anaerobic.sv,anaerobic.indels) {
+  ggplot(aerobic.sv,aes(x=Generation,y=log(normalized.cs))) +
+  theme_classic() +
+  geom_point(size=0.2) +
+  facet_wrap(.~Population,scales='fixed') +
+  geom_point(data=anaerobic.sv,aes(x=Generation,y=log(normalized.cs)),color='red',size=0.2) +
+  geom_point(data=aerobic.indels,aes(x=Generation,y=log(normalized.cs)),color='purple',size=0.2) +
+  geom_point(data=anaerobic.indels,aes(x=Generation,y=log(normalized.cs)),color='green',size=0.2) +
+  ylab('Cumulative number of mutations, normalized by target size') +
+  xlab('Generations (x 10,000)')
+}
+
+c.sv.indels.plot <- plot.aerobic.vs.anaerobic.sv.indels(c.aerobic.sv.mutations, c.aerobic.indel.mutations,c.anaerobic.sv.mutations,c.anaerobic.indel.mutations)
+
 
 plot.aerobic.vs.anaerobic.muts <- function(aerobic.data,anaerobic.data,all.data) {
   ggplot(aerobic.data,aes(x=Generation,y=log(normalized.cs))) +
@@ -922,3 +1011,13 @@ log.rando.plot <- plot.random.subsets(full.mutation.data,log=TRUE)
 ggsave(log.rando.plot,filename='../results/figures/log-rando-plot.pdf')
 rando.plot <- plot.random.subsets(full.mutation.data,log=FALSE)
 ggsave(rando.plot,filename='../results/figures/rando-plot.pdf')
+
+
+## write out gene sets to examine using the STRING database.
+write.csv(full.mutation.data, "../results/full-LTEE-metagenomic-mutations.csv")
+
+#################################################################
+
+## TODO: infer cohorts using Haixu Tang's new algorithm.
+## Then ask whether cohorts show functional enrichment using
+## STRING annotation.

@@ -9,8 +9,9 @@ measureTargetSize.py by Rohan Maddamsetti.
 Substantial code taken from Benjamin Good's LTEE-metagenomic analysis code,
 In particular from parse_file.py from that Github repo.
 
-IMPORTANT TODO: gene numbers in this script and in ArcAB-contingency-analysis don't match
-exactly. I need to debug this for publication.
+IMPORTANT TODO: gene numbers in this script and don't match exactly with
+aerobic-anaerobic-metagenomics.R. 
+I need to debug this for publication.
 
 '''
 
