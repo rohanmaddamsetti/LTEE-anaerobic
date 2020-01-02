@@ -3,6 +3,9 @@
 ## IMPORTANT TODO: numbers of aerobic and anaerobic genes don't exactly match those in
 ## measureTargetSize.py. Debug this before publication.
 
+## IMPORTANT: run anaerobic-anaerobic-genomics.R first, to generate
+## anaerobic-specific-genes.csv and aerobic-specific-genes.csv.
+
 ## Basic premise.
 ## count the cumulative number of stars over time, and plot.
 ## examine different kinds of mutations and genes.
@@ -11,6 +14,12 @@
 
 library(tidyverse)
 ##########################################################################
+
+## Order nonmutator pops, then hypermutator pops by converting Population to
+## factor type and setting the levels.
+nonmutator.pops <- c("Ara-5", "Ara-6", "Ara+1", "Ara+2", "Ara+4", "Ara+5")
+hypermutator.pops <- c("Ara-1", "Ara-2", "Ara-3", "Ara-4", "Ara+3", "Ara+6")
+
 
 ## get the lengths of all genes in REL606.
 ## This excludes genes in repetitive regions of the genome.
@@ -35,8 +44,11 @@ anaerobic.genes <- read.csv('../results/anaerobic-specific-genes.csv', as.is=TRU
 mutation.data <- read.csv('../results/LTEE-metagenome-mutations.csv',
                           header=TRUE,as.is=TRUE) %>%
     mutate(Generation=t0/10000) %>%
-    mutate(anaerobic=(Gene %in% anaerobic.genes$gene)) %>%
-    mutate(aerobic=(Gene %in% aerobic.genes$gene))
+    mutate(anaerobic=(Gene %in% anaerobic.genes$Gene)) %>%
+    mutate(aerobic=(Gene %in% aerobic.genes$Gene)) %>%
+    ## Order nonmutator pops, then hypermutator pops by converting Population to
+    ## factor type and setting the levels.
+    mutate(Population=factor(Population,levels=c(nonmutator.pops,hypermutator.pops)))
 
 gene.mutation.data <- inner_join(mutation.data,REL606.genes)
 
@@ -53,13 +65,14 @@ gene.mutation.data <- filter(gene.mutation.data, !(Gene %in% duplicate.genes$Gen
 ####### Constants. REVAMP THIS CODE!
 ## from measureIntergenicTargetSize.py:
 ## Length of intergenic regions: 487863
-intergenic.length <- 487863
+## Needed to normalize cumulative mutations in non-coding regions.
+##intergenic.length <- 487863
 
 ## from aerobic-anaerobic-genomics.R: ########
 ######################NOTE: DOUBLE CHECK CONSISTENT WITH measureTargetSize.py. output!!!!!
 
-anaerobic.gene.length <- 457593
-aerobic.gene.length <- 219286
+##anaerobic.gene.length <- 457593
+##aerobic.gene.length <- 219286
 ##########################################################################
 
 ## Normalization constant calculations.
@@ -68,44 +81,67 @@ aerobic.gene.length <- 219286
 ## "APPLES TO APPLES".
 
 
-## TODO: check difference between normalizing by gene length and normalizing
+## IMPORTANT TODO: check difference between normalizing by gene length and normalizing
 ## by synonymous/nonsynonymous opportunities. The end result should be very similar.
 ## Then consider refactoring to just use REL606_IDs.csv to get gene lengths.
 
+## IMPORTANT TODO: split nonsynonymous into opportunities for missense and nonsense
+## mutations, as separate classes, to fit annotation given in Ben Good's data.
+
+## Example of how to try this normalization.
+##dN.normalization.const <- total.length * total.nonsynon.sites/(total.synon.sites+total.nonsynon.sites)
+##dS.normalization.const <- total.length * total.synon.sites/(total.synon.sites+total.nonsynon.sites)
+
+#####################################################
+## Think about cutting this stuff-- internal consistency is most important in the
+## comparison to the bootstrapped null.
+
 ## numbers gotten by running measureTargetSize.py.
 ## Use these to normalize cumulative mutations over time.
-target.size.numbers <- read.csv('../results/target_size.csv',header=TRUE,as.is=TRUE)
+##target.size.numbers <- read.csv('../results/target_size.csv',header=TRUE,as.is=TRUE)
 
-anaerobic.length <- filter(target.size.numbers,set=='anaerobic')$total_gene_length
-anaerobic.synon.sites <- filter(target.size.numbers,set=='anaerobic')$synon_sites
-anaerobic.nonsynon.sites <- filter(target.size.numbers,set=='anaerobic')$non_synon_sites
+##anaerobic.length <- filter(target.size.numbers,set=='anaerobic')$total_gene_length
+##anaerobic.synon.sites <- filter(target.size.numbers,set=='anaerobic')$synon_sites
+##anaerobic.nonsynon.sites <- filter(target.size.numbers,set=='anaerobic')$non_synon_sites
 
-aerobic.length <- filter(target.size.numbers,set=='aerobic')$total_gene_length
-aerobic.synon.sites <- filter(target.size.numbers,set=='aerobic')$synon_sites
-aerobic.nonsynon.sites <- filter(target.size.numbers,set=='aerobic')$non_synon_sites
+##aerobic.length <- filter(target.size.numbers,set=='aerobic')$total_gene_length
+##aerobic.synon.sites <- filter(target.size.numbers,set=='aerobic')$synon_sites
+##aerobic.nonsynon.sites <- filter(target.size.numbers,set=='aerobic')$non_synon_sites
 
 
-total.length <- filter(target.size.numbers,set=='genome')$total_gene_length
-total.synon.sites <- filter(target.size.numbers,set=='genome')$synon_sites
-total.nonsynon.sites <- filter(target.size.numbers,set=='genome')$non_synon_sites
+##total.length <- filter(target.size.numbers,set=='genome')$total_gene_length
+##total.synon.sites <- filter(target.size.numbers,set=='genome')$synon_sites
+##total.nonsynon.sites <- filter(target.size.numbers,set=='genome')$non_synon_sites
 
 ########################################
 ## look at accumulation of stars over time.
 ## in other words, look at the rates at which the mutations occur over time.
 ## plot cumulative sum of anaerobic and aerobic dS and dN in each population.
 cumsum.per.pop.helper.func <- function(df) {
-  df %>%
-  arrange(t0) %>%
-  group_by(Population,Generation) %>%
-  summarize(count=n()) %>%
-  mutate(cs=cumsum(count))
+    df %>%
+        arrange(t0) %>%
+        group_by(Population,Generation) %>%
+        summarize(count=n()) %>%
+        mutate(cs=cumsum(count)) %>%
+        ungroup()
 }
 
-calc.cumulative.muts <- function(data, normalization.constant) {
-  data %>%
-  split(.$Population) %>%
-  map_dfr(.f=cumsum.per.pop.helper.func) %>%
-  mutate(normalized.cs=cs/normalization.constant)
+calc.cumulative.muts <- function(data, normalization.constant=NA) {
+
+    ## if normalization.constant is not provided, then
+    ## calculate based on gene length by default.
+    if (is.na(normalization.constant)) {
+        my.genes <- data %>% select(Gene,gene_length) %>% distinct()
+        normalization.constant <- sum(my.genes$gene_length)
+    }
+    
+    c.dat <- data %>%
+        split(.$Population) %>%
+        map_dfr(.f=cumsum.per.pop.helper.func) %>%
+        mutate(normalized.cs=cs/normalization.constant) %>%
+        ## remove any NA values.
+        na.omit()
+    return(c.dat)
 }
 #########################################################################
 ## calculate cumulative numbers of mutations in each category.
@@ -113,30 +149,38 @@ calc.cumulative.muts <- function(data, normalization.constant) {
 
 plot.cumulative.muts <- function(mut.data,logscale=TRUE, my.color="black") {
     if (logscale) {
-        p <- ggplot(mut.data,aes(x=Generation,y=log(normalized.cs)))
+        p <- ggplot(mut.data,aes(x=Generation,y=log10(normalized.cs))) +
+            ylim(-7,-2) +
+            ylab('log[Cumulative number of mutations (normalized)]')
     } else {
-        p <- ggplot(mut.data,aes(x=Generation,y=normalized.cs))
+        p <- ggplot(mut.data,aes(x=Generation,y=normalized.cs)) +
+            ylim(0,0.003) +
+            ylab('Cumulative number of mutations (normalized)')
     }
     p <- p +
         theme_classic() +
         geom_point(size=0.2, color=my.color) +
         geom_step(size=0.2, color=my.color) +
-        facet_wrap(.~Population,scales='fixed') +
-        ylab('Cumulative number of mutations, normalized by target size') +
-        xlab('Generations (x 10,000)')
+        facet_wrap(.~Population,scales='fixed',nrow=4) +
+        xlab('Generations (x 10,000)') +
+        xlim(0,6.3) +
+        theme(axis.title.x = element_text(size=14),
+              axis.title.y = element_text(size=14),
+              axis.text.x  = element_text(size=14),
+              axis.text.y  = element_text(size=14))
     return(p)
-}
+}      
 
 ## take a ggplot object output by plot.cumulative.muts, and add an extra layer.
 add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=TRUE) {
     if (logscale) {
         p <- p +
-            geom_point(data=layer.df, aes(x=Generation,y=log(normalized.cs)), color=my.color, size=0.2) +
-            geom_step(data=layer.df, size=0.2, color=my.color)
+            geom_point(data=layer.df, aes(x=Generation,y=log10(normalized.cs)), color=my.color, size=0.2) +
+            geom_step(data=layer.df, aes(x=Generation,y=log10(normalized.cs)), size=0.2, color=my.color)
         } else {
             p <- p +
                 geom_point(data=layer.df, aes(x=Generation,y=normalized.cs), color=my.color, size=0.2) +
-                geom_step(data=layer.df, size=0.2, color=my.color)
+                geom_step(data=layer.df, aes(x=Generation,y=normalized.cs), size=0.2, color=my.color)
         }
     return(p)
 }
@@ -153,146 +197,301 @@ filter(Annotation=='missense')
 gene.nonsense.mutation.data <- gene.mutation.data %>%
 filter(Annotation=='nonsense')
 
-## let's look at all mutations.
-c.mutations <- calc.cumulative.muts(mutation.data,total.length)
 
-##c.dN.mutations <- calc.cumulative.muts(dN.mutation.data,total.nonsynon.sites)
-dN.normalization.const <- total.length * total.nonsynon.sites/(total.synon.sites+total.nonsynon.sites)
-c.dN.mutations <- calc.cumulative.muts(gene.dN.mutation.data,dN.normalization.const)
+## normalizing constants need to be consistent with the null distributions!
+## gene length normalization now calculated by default in calc.cumulative.muts.
 
-##c.dS.mutations <- calc.cumulative.muts(dS.mutation.data,total.synon.sites)
-dS.normalization.const <- total.length * total.synon.sites/(total.synon.sites+total.nonsynon.sites)
-c.dS.mutations <- calc.cumulative.muts(gene.dS.mutation.data, dS.normalization.const)
+## let's look at all mutations within genes.
+c.mutations <- calc.cumulative.muts(gene.mutation.data)
+                                    
+aerobic.mutation.data <- filter(gene.mutation.data,aerobic==TRUE)
+anaerobic.mutation.data <- filter(gene.mutation.data,anaerobic==TRUE)
 
-
-aerobic.mutation.data <- filter(mutation.data,aerobic==TRUE)
 aerobic.dN.mutation.data <- filter(aerobic.mutation.data,
                                    Annotation=='missense')
-aerobic.dS.mutation.data <- filter(aerobic.mutation.data,
-                                   Annotation=='synonymous')
-aerobic.sv.mutation.data <- filter(aerobic.mutation.data,
-                                   Annotation=='sv')
-aerobic.indel.mutation.data <- filter(aerobic.mutation.data,
-                                   Annotation=='indel')
-
-anaerobic.mutation.data <- filter(mutation.data,anaerobic==TRUE)
 anaerobic.dN.mutation.data <- filter(anaerobic.mutation.data,
                                      Annotation=='missense')
+
+aerobic.dS.mutation.data <- filter(aerobic.mutation.data,
+                                   Annotation=='synonymous')
 anaerobic.dS.mutation.data <- filter(anaerobic.mutation.data,
                                      Annotation=='synonymous')
-anaerobic.sv.mutation.data <- filter(anaerobic.mutation.data,
-                                   Annotation=='sv')
-anaerobic.indel.mutation.data <- filter(anaerobic.mutation.data,
-                                   Annotation=='indel')
 
-c.aerobic.mutations <- calc.cumulative.muts(aerobic.mutation.data,
-                                            aerobic.gene.length)
-c.anaerobic.mutations <- calc.cumulative.muts(anaerobic.mutation.data,
-                                              anaerobic.gene.length)
+aerobic.nonsense.mutation.data <- filter(aerobic.mutation.data,
+                                   Annotation=='nonsense')
+anaerobic.nonsense.mutation.data <- filter(anaerobic.mutation.data,
+                                     Annotation=='nonsense')
 
-c.aerobic.sv.mutations <- calc.cumulative.muts(aerobic.sv.mutation.data,
-                                            aerobic.gene.length)
-c.anaerobic.sv.mutations <- calc.cumulative.muts(anaerobic.sv.mutation.data,
-                                              anaerobic.gene.length)
+## NOTE APPARENT PARALLELISM IN NON-CODING MUTATIONS!
+## INVESTIGATE THIS FURTHER AT THE END.
+aerobic.noncoding.mutation.data <- filter(aerobic.mutation.data,
+                                      Annotation=='noncoding')
+anaerobic.noncoding.mutation.data <- filter(anaerobic.mutation.data,
+                                      Annotation=='noncoding')
 
-c.aerobic.indel.mutations <- calc.cumulative.muts(aerobic.indel.mutation.data,aerobic.gene.length)
-c.anaerobic.indel.mutations <- calc.cumulative.muts(anaerobic.indel.mutation.data,anaerobic.gene.length)
+c.aerobic.mutations <- calc.cumulative.muts(aerobic.mutation.data)
+c.anaerobic.mutations <- calc.cumulative.muts(anaerobic.mutation.data)
 
-c.aerobic.dN.mutations <- calc.cumulative.muts(aerobic.dN.mutation.data,
-                                               aerobic.nonsynon.sites)
-c.aerobic.dS.mutations <- calc.cumulative.muts(aerobic.dS.mutation.data,
-                                               aerobic.synon.sites)
+c.aerobic.dN.mutations <- calc.cumulative.muts(aerobic.dN.mutation.data)
+c.anaerobic.dN.mutations <- calc.cumulative.muts(anaerobic.dN.mutation.data)
 
-c.anaerobic.dN.mutations <- calc.cumulative.muts(anaerobic.dN.mutation.data,
-                                                 anaerobic.nonsynon.sites)
-c.anaerobic.dS.mutations <- calc.cumulative.muts(anaerobic.dS.mutation.data,
-                                                 anaerobic.synon.sites)
+c.aerobic.dS.mutations <- calc.cumulative.muts(aerobic.dS.mutation.data)
+c.anaerobic.dS.mutations <- calc.cumulative.muts(anaerobic.dS.mutation.data)
+
+c.aerobic.nonsense.mutations <- calc.cumulative.muts(aerobic.nonsense.mutation.data)
+c.anaerobic.nonsense.mutations <- calc.cumulative.muts(anaerobic.nonsense.mutation.data)
+
+## not sure how to normalize non-coding mutations..probably should omit if not solved.
+c.aerobic.noncoding.mutations <- calc.cumulative.muts(aerobic.noncoding.mutation.data)
+
+## not sure how to normalize non-coding mutations..probably should omit if not solved.
+c.anaerobic.noncoding.mutations <- calc.cumulative.muts(anaerobic.noncoding.mutation.data)
 
 #############################################################################
 
 ## Figures.
 
 ## plot all classes of mutations in aerobic versus anaerobic genes.
+## Figure for All Mutation Classes.
+
 c.aerobic.vs.anaerobic.plot1 <- plot.cumulative.muts(c.aerobic.mutations,my.color='black',logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=TRUE)
+ggsave(filename="../results/figures/logAllMutFig.pdf", plot=c.aerobic.vs.anaerobic.plot1)
+
+c.aerobic.vs.anaerobic.plot2 <- c.aerobic.vs.anaerobic.plot1 %>%
     add.cumulative.mut.layer(c.mutations, my.color='grey',logscale=TRUE)
+ggsave(filename="../results/figures/logAllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot2)
 
-c.aerobic.vs.anaerobic.plot1
 
-
-## all mutations in gray
-sv.indel.nonsense.mutation.data <- mutation.data %>%
+## make the same plot, for structural variation, indels, nonsense mutations.
+## all genes in gray
+sv.indel.nonsense.muts <- gene.mutation.data %>%
     filter(Annotation %in% c("sv", "indel", "nonsense"))
-c.sv.indel.nonsense.mutations <- calc.cumulative.muts(sv.indel.nonsense.mutation.data,total.length)
+c.sv.indel.nonsense.muts <- calc.cumulative.muts(sv.indel.nonsense.muts)
 
 ## aerobic in black
-aerobic.sv.indel.nonsense.muts <- mutation.data %>%
-    filter(aerobic==TRUE) %>%
-    filter(Annotation %in% c("sv", "indel", "nonsense"))
-c.aerobic.sv.indel.nonsense.mutations <- calc.cumulative.muts(aerobic.sv.indel.nonsense.muts,aerobic.gene.length)
+aerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
+    filter(aerobic==TRUE)
+c.aerobic.sv.indel.nonsense.muts <- calc.cumulative.muts(aerobic.sv.indel.nonsense.muts)
 
 ## anaerobic in red
-anaerobic.sv.indel.nonsense.muts <- mutation.data %>%
-    filter(anaerobic==TRUE) %>%
-    filter(Annotation %in% c("sv", "indel", "nonsense"))
-c.anaerobic.sv.indel.nonsense.mutations <- calc.cumulative.muts(anaerobic.sv.indel.nonsense.muts,anaerobic.gene.length)
+anaerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
+    filter(anaerobic==TRUE)
+c.anaerobic.sv.indel.nonsense.muts <- calc.cumulative.muts(anaerobic.sv.indel.nonsense.muts)
+
 
 aerobic.anaerobic.purifying.plot1 <- plot.cumulative.muts(
-    c.aerobic.sv.indel.nonsense.mutations, logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.mutations, my.color="red",
-                             logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.sv.indel.nonsense.mutations, my.color="grey",
+    c.aerobic.sv.indel.nonsense.muts, logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts, my.color="red",
                              logscale=TRUE)
 aerobic.anaerobic.purifying.plot1
 
-aerobic.anaerobic.purifying.plot2 <- plot.cumulative.muts(
-    c.aerobic.sv.indel.nonsense.mutations, logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.mutations, my.color="red",
-                             logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.sv.indel.nonsense.mutations, my.color="grey",
-                             logscale=FALSE)
+ggsave(filename="../results/figures/logSVIndelNonsense.pdf", plot=aerobic.anaerobic.purifying.plot1)
+
+## check out all sv, indels, nonsense muts too.    
+aerobic.anaerobic.purifying.plot2 <- aerobic.anaerobic.purifying.plot1 %>%
+    add.cumulative.mut.layer(c.sv.indel.nonsense.muts, my.color="grey",
+                             logscale=TRUE)
+
 aerobic.anaerobic.purifying.plot2
+ggsave(filename="../results/figures/logSVIndelNonsense2.pdf", plot=aerobic.anaerobic.purifying.plot2)
+    
 
-## plot transposons and indels as separate layers.
-c.sv.indels.plot <- plot.cumulative.muts(c.aerobic.sv.mutations,my.color='black',logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.aerobic.indel.mutations, my.color='brown',logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.sv.mutations, my.color='red',logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.indel.mutations, my.color='pink',logscale=TRUE)
+## plot just dN.
+aerobic.anaerobic.dN.plot1 <- plot.cumulative.muts(
+    c.aerobic.dN.mutations, logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red",
+                             logscale=TRUE)
+aerobic.anaerobic.dN.plot1
+ggsave(filename="../results/figures/logdN.pdf", plot=aerobic.anaerobic.dN.plot1)
 
-c.sv.indels.plot
+## plot just dS.
+aerobic.anaerobic.dS.plot1 <- plot.cumulative.muts(
+    c.aerobic.dS.mutations, logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red",
+                             logscale=TRUE)
+aerobic.anaerobic.dS.plot1
+ggsave(filename="../results/figures/logdS.pdf", plot=aerobic.anaerobic.dS.plot1)
+
+
+## plot just non-coding mutations.
+aerobic.anaerobic.noncoding.plot1 <- plot.cumulative.muts(
+    c.aerobic.noncoding.mutations, logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations, my.color="red",
+                             logscale=TRUE)
+aerobic.anaerobic.noncoding.plot1
+ggsave(filename="../results/figures/log-noncoding.pdf", plot=aerobic.anaerobic.noncoding.plot1)
 
 ##########################################################################
 ## look at accumulation of stars over time for random subsets of genes.
 ## I want to plot the distribution of cumulative mutations over time for
 ## say, 1000 or 10000 random subsets of genes.
 
-plot.random.subsets <- function(data, subset.size=300, N=1000,log=TRUE) {
+plot.random.subsets <- function(data, subset.size=300, N=1000,logscale=TRUE) {
 
   ## set up an empty plot then add random trajectories, one by one.
-  my.plot <- ggplot(data) +
-  theme_classic() +
-  facet_wrap(.~Population,scales='fixed') +
-  ylab('Cumulative number of mutations, normalized by target size') +
-  xlab('Generations (x 10,000)')
+    my.plot <- ggplot(data) +
+        theme_classic() +
+        facet_wrap(.~Population,scales='fixed',nrow=4) +
+        xlab('Generations (x 10,000)') +
+        xlim(0,6.3)
+
+    if (logscale) {
+        my.plot <- my.plot +
+            ylim(-7,-2) +
+            ylab('log[Cumulative number of mutations (normalized)]')
+    } else {
+        my.plot <- my.plot +
+            ylim(0,0.003) +
+            ylab('Cumulative number of mutations (normalized)')
+    }
 
   for (i in 1:N) {
-    rando.genes <- sample(unique(data$Gene),subset.size)
-    mut.subset <- filter(data,Gene %in% rando.genes)
-    subset.length <- sum(mut.subset$length)
-    c.mut.subset <- calc.cumulative.muts(mut.subset,subset.length)
-    
-    if (log) {
-      my.plot <- my.plot +
-      geom_point(data=c.mut.subset,aes(x=Generation,y=log(normalized.cs)), color='gray',size=0.2,alpha = 0.1)
-    } else {
-      my.plot <- my.plot +
-      geom_point(data=c.mut.subset,aes(x=Generation,y=normalized.cs), color='gray',size=0.2,alpha = 0.1)
+      rando.genes <- sample(unique(data$Gene),subset.size)
+      mut.subset <- filter(data,Gene %in% rando.genes)
+      c.mut.subset <- calc.cumulative.muts(mut.subset)
+      
+      if (logscale) {
+          my.plot <- my.plot +
+              geom_point(data=c.mut.subset,aes(x=Generation,y=log10(normalized.cs)), color='gray',size=0.2,alpha = 0.1)
+      } else {
+        my.plot <- my.plot +
+            geom_point(data=c.mut.subset,aes(x=Generation,y=normalized.cs), color='gray',size=0.2,alpha = 0.1)
     }
   }
-  return(my.plot)
+    return(my.plot)
 }
 
-log.rando.plot <- plot.random.subsets(full.mutation.data,log=TRUE)
-ggsave(log.rando.plot,filename='../results/figures/log-rando-plot.png')
-rando.plot <- plot.random.subsets(full.mutation.data,log=FALSE)
-ggsave(rando.plot,filename='../results/figures/rando-plot.png')
+## plot random expectations by plotting 1000 random subsets of all genes.
+log.all.rando.plot <- plot.random.subsets(gene.mutation.data, logscale=TRUE)
+log.sv.indel.nonsense.rando.plot <- plot.random.subsets(sv.indel.nonsense.muts,logscale=TRUE)
+log.dS.rando.plot <- plot.random.subsets(gene.dS.mutation.data,logscale=TRUE)
+log.dN.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=TRUE)
+log.nonsense.rando.plot <- plot.random.subsets(gene.nonsense.mutation.data,logscale=TRUE)
+
+all.rando.plot <- plot.random.subsets(gene.mutation.data, logscale=FALSE)
+sv.indel.nonsense.rando.plot <- plot.random.subsets(sv.indel.nonsense.muts,logscale=FALSE)
+dS.rando.plot <- plot.random.subsets(gene.dS.mutation.data,logscale=FALSE)
+dN.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=FALSE)
+nonsense.rando.plot <- plot.random.subsets(gene.nonsense.mutation.data,logscale=FALSE)
+
+gene.noncoding.mutation.data <- filter(gene.mutation.data,Annotation=='noncoding')
+log.noncoding.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=TRUE)
+noncoding.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=FALSE)
+
+## add real data on top of the random expectations to see what it looks like
+## I think this can be made into a rigorous hypothesis test.
+
+log.all.test.plot <- log.all.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.mutations,my.color="black", logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.mutations,my.color="red", logscale=TRUE)
+
+log.sv.indel.nonsense.test.plot <- log.sv.indel.nonsense.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts,my.color="black", logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts,my.color="red", logscale=TRUE)
+
+log.dS.test.plot <- log.dS.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.dS.mutations,my.color="black", logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.dS.mutations,my.color="red", logscale=TRUE)
+
+log.dN.test.plot <- log.dN.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.dN.mutations,my.color="black", logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.dN.mutations,my.color="red", logscale=TRUE)
+
+log.nonsense.test.plot <- log.nonsense.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.nonsense.mutations,my.color="black", logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.nonsense.mutations,my.color="red", logscale=TRUE)
+
+
+## looks like normalization is off for the noncoding plot.
+log.noncoding.test.plot <- log.noncoding.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.noncoding.mutations,my.color="black",logscale=TRUE)%>%
+    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations,my.color="red", logscale=TRUE)
+
+### Now without the logscale.
+all.test.plot <- all.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.mutations,my.color="black", logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.anaerobic.mutations,my.color="red", logscale=FALSE)
+
+sv.indel.nonsense.test.plot <- sv.indel.nonsense.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts,my.color="black", logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts,my.color="red", logscale=FALSE)
+
+dS.test.plot <- dS.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.dS.mutations,my.color="black", logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.anaerobic.dS.mutations,my.color="red", logscale=FALSE)
+
+dN.test.plot <- dN.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.dN.mutations,my.color="black", logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.anaerobic.dN.mutations,my.color="red", logscale=FALSE)
+
+nonsense.test.plot <- nonsense.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.nonsense.mutations,my.color="black", logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.anaerobic.nonsense.mutations,my.color="red", logscale=FALSE)
+
+## looks like normalization is off for the noncoding plot.
+noncoding.test.plot <- noncoding.rando.plot %>%
+    add.cumulative.mut.layer(c.aerobic.noncoding.mutations,my.color="black",logscale=FALSE)%>%
+    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations,my.color="red", logscale=FALSE)
+
+## Save plots. This is really slow...
+
+## TODO: to speed up, create a large dataframe, then use geom_smooth to plot a
+## confidence interval around the conditional mean. Do this in a second function
+## to experiment.
+
+ggsave(log.all.rando.plot,filename='../results/figures/log-all-rando-plot.png')
+ggsave(log.sv.indel.nonsense.rando.plot,filename='../results/figures/log-sv-indel-nonsense-rando-plot.png')
+ggsave(log.all.test.plot,filename='../results/figures/log-all-testplot.png')
+
+ggsave(log.sv.indel.nonsense.test.plot,filename='../results/figures/log-sv-indel-nonsense-testplot.png')
+ggsave(log.dS.test.plot,filename='../results/figures/log-dS-testplot.png')
+ggsave(log.dN.test.plot,filename='../results/figures/log-dN-testplot.png')
+ggsave(log.nonsense.test.plot,filename='../results/figures/log-nonsense-testplot.png')
+ggsave(log.noncoding.test.plot,filename='../results/figures/log-noncoding-testplot.png')
+
+## without log scale.
+
+ggsave(all.rando.plot,filename='../results/figures/all-rando-plot.png')
+ggsave(sv.indel.nonsense.rando.plot,filename='../results/figures/sv-indel-nonsense-rando-plot.png')
+ggsave(all.test.plot,filename='../results/figures/all-testplot.png')
+
+ggsave(sv.indel.nonsense.test.plot,filename='../results/figures/sv-indel-nonsense-testplot.png')
+ggsave(dS.test.plot,filename='../results/figures/dS-testplot.png')
+ggsave(dN.test.plot,filename='../results/figures/dN-testplot.png')
+ggsave(nonsense.test.plot,filename='../results/figures/nonsense-testplot.png')
+ggsave(noncoding.test.plot,filename='../results/figures/noncoding-testplot.png')
+
+########################################################################################
+## LOOK AT PARALLEL EVOLUTION IN NON-CODING MUTATIONS!
+## LOOK AT mntH and hupA
+aerobic.noncoding.summary <- aerobic.noncoding.mutation.data %>% group_by(Gene,Position) %>%
+    summarize(count=n()) %>% arrange(desc(count,Position))
+
+aerobic.noncoding.summary2 <- aerobic.noncoding.mutation.data %>% group_by(Gene) %>%
+    summarize(count=n()) %>% filter(count>1) %>% arrange(desc(count,Position))
+
+aerobic.noncoding.summary3 <- filter(aerobic.noncoding.summary, Gene %in% aerobic.noncoding.summary2$Gene)
+
+anaerobic.noncoding.summary <- anaerobic.noncoding.mutation.data %>% group_by(Gene,Position) %>% summarize(count=n()) %>% arrange(desc(count,Position))
+
+anaerobic.noncoding.summary2 <- anaerobic.noncoding.mutation.data %>% group_by(Gene) %>%
+    summarize(count=n()) %>% filter(count > 1) %>% arrange(desc(count,Position))
+
+anaerobic.noncoding.summary3 <- filter(anaerobic.noncoding.summary, Gene %in% anaerobic.noncoding.summary2$Gene)
+
+## let's look at all noncoding mutations.
+noncoding.mutation.data <- mutation.data %>% filter(Annotation=='noncoding')
+
+noncoding.summary1 <- noncoding.mutation.data %>% group_by(Gene,Position) %>%
+    summarize(count=n()) %>% arrange(desc(count,Position))
+
+noncoding.summary2 <- noncoding.mutation.data %>% group_by(Gene) %>%
+    summarize(count=n()) %>% filter(count > 3) %>% arrange(desc(count,Position))
+
+noncoding.summary3 <- filter(noncoding.summary1, Gene %in% noncoding.summary2$Gene) 
+
+noncoding.summary4 <- filter(noncoding.summary3,Gene != "intergenic")
+noncoding.summary4
+
+mntH.muts <- filter(mutation.data,Gene == 'mntH')
