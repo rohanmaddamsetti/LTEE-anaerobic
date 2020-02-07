@@ -120,63 +120,41 @@ binom.test(x = nrow(mutator.50K.in.up.O2.data.no.dS),
            n = nrow(mutator.50K.in.up.O2.data.no.dS)+nrow(mutator.50K.in.down.O2.data.no.dS),
            p = target.prob, alternative="two.sided")
 
-## redo, just on non-synonymous mutations, and on rigorously computed target sizes
-## from measureTargetSize.py.
-
-## numbers gotten by running measureTargetSize.py.
-## Use these to normalize cumulative mutations over time.
-anaerobic.synon.sites <- 103549
-anaerobic.nonsynon.sites <- 343951
-aerobic.synon.sites <- 50022.66666666666
-aerobic.nonsynon.sites <- 168705.33333333337
-total.synon.sites <- 890787
-total.nonsynon.sites <- 3001647
-
-target.prob2 <- anaerobic.nonsynon.sites/(anaerobic.nonsynon.sites+aerobic.nonsynon.sites)
-
-target.prob3 <- (anaerobic.nonsynon.sites+anaerobic.synon.sites)/(anaerobic.nonsynon.sites+anaerobic.synon.sites+aerobic.nonsynon.sites+aerobic.synon.sites)
-
+## redo, just on non-synonymous mutations.
 ## non-mutator result is more significant! p < 10^-8.
 binom.test(x = nrow(filter(nonmutator.50K.in.up.O2.data,snp_type=='nonsynonymous')),
            n = nrow(filter(nonmutator.50K.in.up.O2.data,snp_type=='nonsynonymous'))+nrow(filter(nonmutator.50K.in.down.O2.data,snp_type=='nonsynonymous')),
            p=target.prob,
            alternative="two.sided")
 
-## By using a more accurate target distribution,
-## it's clear that this effect is largely driven by
-## non-point mutations, but is still significant when we restrict to point mutations.
-
-## just considering dN-- result is marginally insignificant (p = 0.05893).
+## mutator result, using gene length as target size,
+## just considering dN-- result is insignificant (p = 0.1113).
 mutator.50K.in.up.O2.data.just.dN <- filter(mutator.50K.in.up.O2.data, snp_type == 'nonsynonymous')
 mutator.50K.in.down.O2.data.just.dN <- filter(mutator.50K.in.down.O2.data, snp_type == 'nonsynonymous')
 
 binom.test(x = nrow(mutator.50K.in.up.O2.data.just.dN),
            n = nrow(mutator.50K.in.up.O2.data.just.dN)+nrow(mutator.50K.in.down.O2.data.just.dN),
-           p = target.prob2,
+           p = target.prob,
            alternative="two.sided")
 
-## more significant when considering dS! (p = 0.03417)
+## mutator result, using gene length as target size,
+## more significant when considering dS, but still not significant (p = 0.0672).
 mutator.50K.in.up.O2.data.dNanddS <- filter(mutator.50K.in.up.O2.data, snp_type %in% c('nonsynonymous','synonymous'))
 mutator.50K.in.down.O2.data.dNanddS <- filter(mutator.50K.in.down.O2.data, snp_type %in% c('nonsynonymous','synonymous'))
 
 binom.test(x = nrow(mutator.50K.in.up.O2.data.dNanddS),
            n = nrow(mutator.50K.in.up.O2.data.dNanddS)+nrow(mutator.50K.in.down.O2.data.dNanddS),
-           p = target.prob3,
+           p = target.prob,
            alternative="two.sided")
 
-## And more significant again when including (rare) nonsense mutations (p = 0.02631).
+## And more significant again when including (rare) nonsense mutations,
+## but still marginally insignficant (p = 0.0525).
 mutator.50K.in.up.O2.data.just.pointmut <- mutator.50K.in.up.O2.data %>%
     filter(snp_type != 'not_snp')
 
 mutator.50K.in.down.O2.data.just.pointmut <- mutator.50K.in.down.O2.data %>%
     filter(snp_type != 'not_snp')
 
-binom.test(x = nrow(mutator.50K.in.up.O2.data.just.pointmut),
-           n = nrow(mutator.50K.in.up.O2.data.just.pointmut)+nrow(mutator.50K.in.down.O2.data.just.pointmut),
-           p = target.prob3,
-           alternative="two.sided")
-
-## although marginally insignificant if we just use gene.length to normalize (p = 0.0525).
 binom.test(x = nrow(mutator.50K.in.up.O2.data.just.pointmut),
            n = nrow(mutator.50K.in.up.O2.data.just.pointmut)+nrow(mutator.50K.in.down.O2.data.just.pointmut),
            p = target.prob,
