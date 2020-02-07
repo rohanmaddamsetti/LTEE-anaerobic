@@ -152,6 +152,7 @@ calc.cumulative.muts <- function(data, normalization.constant=NA) {
 ## calculate cumulative numbers of mutations in each category.
 ## Then, make plots to see if any interesting patterns emerge.
 
+## for vanilla plotting.
 plot.cumulative.muts <- function(mut.data,logscale=TRUE, my.color="black") {
     if (logscale) {
         p <- ggplot(mut.data,aes(x=Generation,y=log10(normalized.cs))) +
@@ -176,8 +177,78 @@ plot.cumulative.muts <- function(mut.data,logscale=TRUE, my.color="black") {
     return(p)
 }      
 
+## This plot visualizes a two-tailed test (alpha = 0.05)
+## against a bootstrapped null distribution.
+## This is what we want to use for publication.
+plot.base.layer <- function(data, subset.size=300, N=1000, alpha = 0.05, logscale=FALSE, normalization.constant=NA) {
+
+    ## This function takes the index for the current draw, and samples the data,
+    ## generating a random gene set for which to calculate cumulative mutations.
+    generate.cumulative.mut.subset <- function(idx) {
+        rando.genes <- sample(unique(data$Gene),subset.size)
+        mut.subset <- filter(data,Gene %in% rando.genes)
+        c.mut.subset <- calc.cumulative.muts(mut.subset, normalization.constant) %>%
+            mutate(bootstrap_replicate=idx)
+        return(c.mut.subset)
+    }
+
+    ## make a dataframe of bootstrapped trajectories.
+    ## look at accumulation of stars over time for random subsets of genes.
+    ## I want to plot the distribution of cumulative mutations over time for
+    ## say, 1000 or 10000 random subsets of genes.
+
+    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
+
+    ## filter out the top alpha/2 and bottom alpha/2 trajectories from each population,
+    ## for a two-sided test. default is alpha == 0.05.
+    
+    trajectory.summary <- bootstrapped.trajectories %>%
+        ## important: don't drop empty groups.
+        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
+        summarize(final.norm.cs=max(normalized.cs)) %>%
+        ungroup() 
+    
+    top.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(alpha/2) %>%
+        select(-final.norm.cs) %>%
+        mutate(in.top=TRUE)
+    
+    bottom.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(-alpha/2) %>%
+        select(-final.norm.cs) %>%
+        mutate(in.bottom=TRUE)
+    
+    filtered.trajectories <- bootstrapped.trajectories %>%
+        left_join(top.trajectories) %>%
+        left_join(bottom.trajectories) %>%
+        filter(is.na(in.top)) %>%
+        filter(is.na(in.bottom)) %>%
+        select(-in.top,-in.bottom)
+
+    if (logscale) {
+        p <- ggplot(filtered.trajectories,aes(x=Generation,y=log10(normalized.cs))) +
+            ylab('log[Cumulative number of mutations (normalized)]')
+    } else {
+        p <- ggplot(filtered.trajectories,aes(x=Generation,y=normalized.cs)) +
+            ylab('Cumulative number of mutations (normalized)')
+    }
+    p <- p +
+        theme_classic() +
+        geom_point(size=0.2, color='gray') +
+        facet_wrap(.~Population,scales='free',nrow=4) +
+        xlab('Generations (x 10,000)') +
+        xlim(0,6.3) +
+        theme(axis.title.x = element_text(size=14),
+              axis.title.y = element_text(size=14),
+              axis.text.x  = element_text(size=14),
+              axis.text.y  = element_text(size=14))
+    return(p)                
+}
+
 ## take a ggplot object output by plot.cumulative.muts, and add an extra layer.
-add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=TRUE) {
+add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=FALSE) {
     if (logscale) {
         p <- p +
             geom_point(data=layer.df, aes(x=Generation,y=log10(normalized.cs)), color=my.color, size=0.2) +
@@ -200,7 +271,10 @@ filter(Annotation=='missense')
 
 ## let's look at nonsense mutations.
 gene.nonsense.mutation.data <- gene.mutation.data %>%
-filter(Annotation=='nonsense')
+    filter(Annotation=='nonsense')
+
+## let's look at noncoding mutations.
+gene.noncoding.mutation.data <- filter(gene.mutation.data,Annotation=='noncoding')
 
 
 ## normalizing constants need to be consistent with the null distributions!
@@ -246,168 +320,24 @@ c.anaerobic.dS.mutations <- calc.cumulative.muts(anaerobic.dS.mutation.data)
 c.aerobic.nonsense.mutations <- calc.cumulative.muts(aerobic.nonsense.mutation.data)
 c.anaerobic.nonsense.mutations <- calc.cumulative.muts(anaerobic.nonsense.mutation.data)
 
-## not sure how to normalize non-coding mutations..probably should omit if not solved.
-c.aerobic.noncoding.mutations <- calc.cumulative.muts(aerobic.noncoding.mutation.data)
+## normalize noncoding mutations by 1 across the board.
+c.aerobic.noncoding.mutations <- calc.cumulative.muts(aerobic.noncoding.mutation.data,
+                                                      normalization.constant=1)
 
-## not sure how to normalize non-coding mutations..probably should omit if not solved.
-c.anaerobic.noncoding.mutations <- calc.cumulative.muts(anaerobic.noncoding.mutation.data)
+c.anaerobic.noncoding.mutations <- calc.cumulative.muts(anaerobic.noncoding.mutation.data,
+                                                        normalization.constant=1)
 
 #############################################################################
-
-## Figures.
+## Figures. Plot real data on top of the random expectations to plot hypothesis tests.
 
 ## plot all classes of mutations in aerobic versus anaerobic genes.
 ## Figure for All Mutation Classes.
-
-c.aerobic.vs.anaerobic.plot1 <- plot.cumulative.muts(c.aerobic.mutations,my.color='black',logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=TRUE)
-ggsave(filename="../results/figures/logAllMutFig.pdf", plot=c.aerobic.vs.anaerobic.plot1)
-
-## Let's try some new visualizations.
-
-plot.base.layer <- function(data, subset.size=300, N=1000, logscale=TRUE) {
-
-    ## This function takes the index for the current draw, and samples the data,
-    ## generating a random gene set for which to calculate cumulative mutations.
-    generate.cumulative.mut.subset <- function(idx) {
-        rando.genes <- sample(unique(data$Gene),subset.size)
-        mut.subset <- filter(data,Gene %in% rando.genes)
-        c.mut.subset <- calc.cumulative.muts(mut.subset) %>%
-            mutate(bootstrap_replicate=idx)
-        return(c.mut.subset)
-    }
-
-    ## make a dataframe of bootstrapped trajectories.
-    ## look at accumulation of stars over time for random subsets of genes.
-    ## I want to plot the distribution of cumulative mutations over time for
-    ## say, 1000 or 10000 random subsets of genes.
-
-    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
-
-    ## filter out the top 2.5% and bottom 2.5% of trajectories from each population,
-    ## for a two-sided test at alpha = 0.05.
-    
-    trajectory.summary <- bootstrapped.trajectories %>%
-        ## important: don't drop empty groups.
-        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
-        summarize(final.norm.cs=max(normalized.cs)) %>%
-        ungroup() 
-    
-    top.trajectories <- trajectory.summary %>%
-        group_by(Population) %>%
-        top_frac(0.025) %>%
-        select(-final.norm.cs) %>%
-        mutate(in.top=TRUE)
-    
-    bottom.trajectories <- trajectory.summary %>%
-        group_by(Population) %>%
-        top_frac(-0.025) %>%
-        select(-final.norm.cs) %>%
-        mutate(in.bottom=TRUE)
-    
-    filtered.trajectories <- bootstrapped.trajectories %>%
-        left_join(top.trajectories) %>%
-        left_join(bottom.trajectories) %>%
-        filter(is.na(in.top)) %>%
-        filter(is.na(in.bottom)) %>%
-        select(-in.top,-in.bottom)
-
-
-    if (logscale) {
-        p <- ggplot(filtered.trajectories,aes(x=Generation,y=log10(normalized.cs))) +
-            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=log10(normalized.cs)), color="gray",se=TRUE)
-            ylab('log[Cumulative number of mutations (normalized)]')
-    } else {
-        p <- ggplot(filtered.trajectories,aes(x=Generation,y=normalized.cs)) +
-            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=normalized.cs), color="gray",se=TRUE)
-            ylab('Cumulative number of mutations (normalized)')
-    }
-    p <- p +
-        theme_classic() +
-        geom_point(size=0.2, color='gray') +
-        facet_wrap(.~Population,scales='free',nrow=4) +
-        xlab('Generations (x 10,000)') +
-        xlim(0,6.3) +
-        theme(axis.title.x = element_text(size=14),
-              axis.title.y = element_text(size=14),
-              axis.text.x  = element_text(size=14),
-              axis.text.y  = element_text(size=14))
-    return(p)                
-}
-
-add.smooth.mean.layer <- function(p, data, subset.size=300, N=1000, logscale=TRUE) {
-
-    ## This function takes the index for the current draw, and samples the data,
-    ## generating a random gene set for which to calculate cumulative mutations.
-    generate.cumulative.mut.subset <- function(idx) {
-        rando.genes <- sample(unique(data$Gene),subset.size)
-        mut.subset <- filter(data,Gene %in% rando.genes)
-        c.mut.subset <- calc.cumulative.muts(mut.subset) %>%
-            mutate(bootstrap_replicate=idx)
-        return(c.mut.subset)
-    }
-
-    ## make a dataframe of bootstrapped trajectories.
-    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
-
-    ## filter out the top 2.5% and bottom 2.5% of trajectories from each population,
-    ## for a two-sided test at alpha = 0.05.
-    
-    trajectory.summary <- bootstrapped.trajectories %>%
-        ## important: don't drop empty groups.
-        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
-        summarize(final.norm.cs=max(normalized.cs)) %>%
-        ungroup() 
-    
-    top.trajectories <- trajectory.summary %>%
-        group_by(Population) %>%
-        top_frac(0.025) %>%
-        select(-final.norm.cs) %>%
-        mutate(in.top=TRUE)
-    
-    bottom.trajectories <- trajectory.summary %>%
-        group_by(Population) %>%
-        top_frac(-0.025) %>%
-        select(-final.norm.cs) %>%
-        mutate(in.bottom=TRUE)
-    
-    filtered.trajectories <- bootstrapped.trajectories %>%
-        left_join(top.trajectories) %>%
-        left_join(bottom.trajectories) %>%
-        filter(is.na(in.top)) %>%
-        filter(is.na(in.bottom)) %>%
-        select(-in.top,-in.bottom)
-        
-    
-    if (logscale) {
-        p <- p +
-            geom_point(data=filtered.trajectories, aes(x=Generation,y=log10(normalized.cs)), color="gray",size=0.2)
-            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=log10(normalized.cs)), color="gray",se=TRUE)
-        
-    } else {
-        p <- p +
-            geom_point(data=filtered.trajectories, aes(x=Generation,y=normalized.cs), color="gray",size=0.2)
-            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=normalized.cs), color="gray",se=TRUE)
-    }
-    return(p)
-}
-
-
-c.aerobic.vs.anaerobic.plot2 <- plot.base.layer(gene.mutation.data,logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.aerobic.mutations,my.color='black',logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=TRUE)
-
-c.aerobic.vs.anaerobic.plot3 <- plot.base.layer(gene.mutation.data,logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.aerobic.mutations,my.color='black',logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=FALSE)
-
-
-
-ggsave(filename="../results/figures/logAllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot2)
-ggsave(filename="../results/figures/AllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot3)
+c.aerobic.vs.anaerobic.plot <- plot.base.layer(gene.mutation.data) %>%
+    add.cumulative.mut.layer(c.aerobic.mutations,my.color='black') %>%
+    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red')
+ggsave(filename="../results/figures/AllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot)
 
 ## make the same plot, for structural variation, indels, nonsense mutations.
-## all genes in gray
 sv.indel.nonsense.muts <- gene.mutation.data %>%
     filter(Annotation %in% c("sv", "indel", "nonsense"))
 c.sv.indel.nonsense.muts <- calc.cumulative.muts(sv.indel.nonsense.muts)
@@ -423,184 +353,39 @@ anaerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
 c.anaerobic.sv.indel.nonsense.muts <- calc.cumulative.muts(anaerobic.sv.indel.nonsense.muts)
 
 
-aerobic.anaerobic.purifying.plot1 <- plot.cumulative.muts(
-    c.aerobic.sv.indel.nonsense.muts, logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts, my.color="red",
-                             logscale=TRUE)
-aerobic.anaerobic.purifying.plot1
-
-ggsave(filename="../results/figures/logSVIndelNonsense.pdf", plot=aerobic.anaerobic.purifying.plot1)
-
-## check out all sv, indels, nonsense muts too.    
-aerobic.anaerobic.purifying.plot2 <- aerobic.anaerobic.purifying.plot1 %>%
-    add.cumulative.mut.layer(c.sv.indel.nonsense.muts, my.color="grey",
-                             logscale=TRUE)
-
-aerobic.anaerobic.purifying.plot2
-ggsave(filename="../results/figures/logSVIndelNonsense2.pdf", plot=aerobic.anaerobic.purifying.plot2)
-    
+aerobic.anaerobic.purifying.plot <- plot.base.layer(sv.indel.nonsense.muts) %>%
+    add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts, my.color="black") %>%
+    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts, my.color="red")
+ggsave(filename="../results/figures/SVIndelNonsense.pdf", plot=aerobic.anaerobic.purifying.plot)
 
 ## plot just dN.
-aerobic.anaerobic.dN.plot1 <- plot.cumulative.muts(
-    c.aerobic.dN.mutations, logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red",
-                             logscale=TRUE)
-aerobic.anaerobic.dN.plot1
-ggsave(filename="../results/figures/logdN.pdf", plot=aerobic.anaerobic.dN.plot1)
+aerobic.anaerobic.dN.plot <- plot.base.layer(gene.dN.mutation.data) %>%
+        add.cumulative.mut.layer(c.aerobic.dN.mutations, my.color="black") %>%
+    add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red")    
+ggsave(filename="../results/figures/dN.pdf", plot=aerobic.anaerobic.dN.plot)
+
 
 ## plot just dS.
-aerobic.anaerobic.dS.plot1 <- plot.cumulative.muts(
-    c.aerobic.dS.mutations, logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red",
-                             logscale=TRUE)
-aerobic.anaerobic.dS.plot1
-ggsave(filename="../results/figures/logdS.pdf", plot=aerobic.anaerobic.dS.plot1)
+aerobic.anaerobic.dS.plot <- plot.base.layer(gene.dS.mutation.data) %>%
+    add.cumulative.mut.layer(c.aerobic.dS.mutations, my.color="black") %>%
+    add.cumulative.mut.layer(c.anaerobic.dS.mutations, my.color="red") 
+ggsave(filename="../results/figures/dS.pdf", plot=aerobic.anaerobic.dS.plot)
 
+## plot just nonsense mutations.
+aerobic.anaerobic.nonsense.plot <- plot.base.layer(gene.nonsense.mutation.data) %>%
+    add.cumulative.mut.layer(c.aerobic.nonsense.mutations, my.color="black") %>%
+    add.cumulative.mut.layer(c.anaerobic.nonsense.mutations, my.color="red") 
+ggsave(filename="../results/figures/nonsense.pdf", plot=aerobic.anaerobic.nonsense.plot)
 
 ## plot just non-coding mutations.
-aerobic.anaerobic.noncoding.plot1 <- plot.cumulative.muts(
-    c.aerobic.noncoding.mutations, logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations, my.color="red",
-                             logscale=TRUE)
-aerobic.anaerobic.noncoding.plot1
-ggsave(filename="../results/figures/log-noncoding.pdf", plot=aerobic.anaerobic.noncoding.plot1)
-
-##########################################################################
-
-plot.random.subsets <- function(data, subset.size=300, N=1000,logscale=TRUE) {
-
-  ## set up an empty plot then add random trajectories, one by one.
-    my.plot <- ggplot(data) +
-        theme_classic() +
-        facet_wrap(.~Population,scales='fixed',nrow=4) +
-        xlab('Generations (x 10,000)') +
-        xlim(0,6.3)
-
-    if (logscale) {
-        my.plot <- my.plot +
-            ylim(-7,-2) +
-            ylab('log[Cumulative number of mutations (normalized)]')
-    } else {
-        my.plot <- my.plot +
-            ylim(0,0.003) +
-            ylab('Cumulative number of mutations (normalized)')
-    }
-
-  for (i in 1:N) {
-      rando.genes <- sample(unique(data$Gene),subset.size)
-      mut.subset <- filter(data,Gene %in% rando.genes)
-      c.mut.subset <- calc.cumulative.muts(mut.subset)
-      
-      if (logscale) {
-          my.plot <- my.plot +
-              geom_point(data=c.mut.subset,aes(x=Generation,y=log10(normalized.cs)), color='gray',size=0.2,alpha = 0.1)
-      } else {
-        my.plot <- my.plot +
-            geom_point(data=c.mut.subset,aes(x=Generation,y=normalized.cs), color='gray',size=0.2,alpha = 0.1)
-    }
-  }
-    return(my.plot)
-}
-
-## plot random expectations by plotting 1000 random subsets of all genes.
-log.all.rando.plot <- plot.random.subsets(gene.mutation.data, logscale=TRUE)
-log.sv.indel.nonsense.rando.plot <- plot.random.subsets(sv.indel.nonsense.muts,logscale=TRUE)
-log.dS.rando.plot <- plot.random.subsets(gene.dS.mutation.data,logscale=TRUE)
-log.dN.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=TRUE)
-log.nonsense.rando.plot <- plot.random.subsets(gene.nonsense.mutation.data,logscale=TRUE)
-
-all.rando.plot <- plot.random.subsets(gene.mutation.data, logscale=FALSE)
-sv.indel.nonsense.rando.plot <- plot.random.subsets(sv.indel.nonsense.muts,logscale=FALSE)
-dS.rando.plot <- plot.random.subsets(gene.dS.mutation.data,logscale=FALSE)
-dN.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=FALSE)
-nonsense.rando.plot <- plot.random.subsets(gene.nonsense.mutation.data,logscale=FALSE)
-
-gene.noncoding.mutation.data <- filter(gene.mutation.data,Annotation=='noncoding')
-log.noncoding.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=TRUE)
-noncoding.rando.plot <- plot.random.subsets(gene.dN.mutation.data,logscale=FALSE)
-
-## add real data on top of the random expectations to see what it looks like
-## I think this can be made into a rigorous hypothesis test.
-
-log.all.test.plot <- log.all.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.mutations,my.color="black", logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.mutations,my.color="red", logscale=TRUE)
-
-log.sv.indel.nonsense.test.plot <- log.sv.indel.nonsense.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts,my.color="black", logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts,my.color="red", logscale=TRUE)
-
-log.dS.test.plot <- log.dS.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.dS.mutations,my.color="black", logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.dS.mutations,my.color="red", logscale=TRUE)
-
-log.dN.test.plot <- log.dN.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.dN.mutations,my.color="black", logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.dN.mutations,my.color="red", logscale=TRUE)
-
-log.nonsense.test.plot <- log.nonsense.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.nonsense.mutations,my.color="black", logscale=TRUE) %>%
-    add.cumulative.mut.layer(c.anaerobic.nonsense.mutations,my.color="red", logscale=TRUE)
-
-
-## looks like normalization is off for the noncoding plot.
-log.noncoding.test.plot <- log.noncoding.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.noncoding.mutations,my.color="black",logscale=TRUE)%>%
-    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations,my.color="red", logscale=TRUE)
-
-### Now without the logscale.
-all.test.plot <- all.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.mutations,my.color="black", logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.mutations,my.color="red", logscale=FALSE)
-
-sv.indel.nonsense.test.plot <- sv.indel.nonsense.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts,my.color="black", logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts,my.color="red", logscale=FALSE)
-
-dS.test.plot <- dS.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.dS.mutations,my.color="black", logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.dS.mutations,my.color="red", logscale=FALSE)
-
-dN.test.plot <- dN.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.dN.mutations,my.color="black", logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.dN.mutations,my.color="red", logscale=FALSE)
-
-nonsense.test.plot <- nonsense.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.nonsense.mutations,my.color="black", logscale=FALSE) %>%
-    add.cumulative.mut.layer(c.anaerobic.nonsense.mutations,my.color="red", logscale=FALSE)
-
-## looks like normalization is off for the noncoding plot.
-noncoding.test.plot <- noncoding.rando.plot %>%
-    add.cumulative.mut.layer(c.aerobic.noncoding.mutations,my.color="black",logscale=FALSE)%>%
-    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations,my.color="red", logscale=FALSE)
-
-## Save plots. This is really slow...
-
-## TODO: to speed up, create a large dataframe, then use geom_smooth to plot a
-## confidence interval around the conditional mean. Do this in a second function
-## to experiment.
-
-ggsave(log.all.rando.plot,filename='../results/figures/log-all-rando-plot.png')
-ggsave(log.sv.indel.nonsense.rando.plot,filename='../results/figures/log-sv-indel-nonsense-rando-plot.png')
-ggsave(log.all.test.plot,filename='../results/figures/log-all-testplot.png')
-
-ggsave(log.sv.indel.nonsense.test.plot,filename='../results/figures/log-sv-indel-nonsense-testplot.png')
-ggsave(log.dS.test.plot,filename='../results/figures/log-dS-testplot.png')
-ggsave(log.dN.test.plot,filename='../results/figures/log-dN-testplot.png')
-ggsave(log.nonsense.test.plot,filename='../results/figures/log-nonsense-testplot.png')
-ggsave(log.noncoding.test.plot,filename='../results/figures/log-noncoding-testplot.png')
-
-## without log scale.
-
-ggsave(all.rando.plot,filename='../results/figures/all-rando-plot.png')
-ggsave(sv.indel.nonsense.rando.plot,filename='../results/figures/sv-indel-nonsense-rando-plot.png')
-ggsave(all.test.plot,filename='../results/figures/all-testplot.png')
-
-ggsave(sv.indel.nonsense.test.plot,filename='../results/figures/sv-indel-nonsense-testplot.png')
-ggsave(dS.test.plot,filename='../results/figures/dS-testplot.png')
-ggsave(dN.test.plot,filename='../results/figures/dN-testplot.png')
-ggsave(nonsense.test.plot,filename='../results/figures/nonsense-testplot.png')
-ggsave(noncoding.test.plot,filename='../results/figures/noncoding-testplot.png')
+## normalize by 1 since dividing by gene length doesn't make sense in this case.
+## BUG: NORMALIZATION IS STILL OFF!
+aerobic.anaerobic.noncoding.plot <- plot.base.layer(gene.noncoding.mutation.data,
+                                                    normalization.constant=1) %>%
+    add.cumulative.mut.layer(c.aerobic.noncoding.mutations, my.color="black") %>%
+    add.cumulative.mut.layer(c.anaerobic.noncoding.mutations, my.color="red")
+aerobic.anaerobic.noncoding.plot
+ggsave(filename="../results/figures/noncoding.pdf", plot=aerobic.anaerobic.noncoding.plot)
 
 ########################################################################################
 ## LOOK AT PARALLEL EVOLUTION IN NON-CODING MUTATIONS!
