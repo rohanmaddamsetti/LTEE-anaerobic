@@ -10,8 +10,9 @@ Substantial code taken from Benjamin Good's LTEE-metagenomic analysis code,
 In particular from parse_file.py from that Github repo.
 
 IMPORTANT TODO: gene numbers in this script and don't match exactly with
-aerobic-anaerobic-metagenomics.R. 
-I need to debug this for publication.
+aerobic-anaerobic-metagenomics.R.
+
+At present, this script is not currently used in the analysis.
 
 '''
 
@@ -756,28 +757,9 @@ if __name__=='__main__':
     print("Total:", len(reference_sequence))
     total_genome_string = print_target_size_statistics('genome', gene_data)
 
-    print('\nSTATISTICS FOR A SET OF RANDOM GENES, THE SIZE OF ANAEROBIC GENE SET: ')
-    ## now print statistics for a random set of genes with the same length as the anaerobic genes.
-
-    anaerobic_rando_set = choose_random_tags(gene_data,len(anaerobic_gene_data[0]))
-    anaerobic_random_csvfile = '../results/random-anaerobic-set.csv'
-    print('printing random genes to:',anaerobic_random_csvfile)
-    print_random_gene_csv(anaerobic_rando_set,gene_data, anaerobic_random_csvfile)
-    anaerobic_rando_gene_data = filter_gene_data(gene_data, anaerobic_rando_set)
-    random_anaerobic_string = print_target_size_statistics('random_anaerobic', anaerobic_rando_gene_data)
-
-    print('\nSTATISTICS FOR A SET OF RANDOM GENES, THE SIZE OF AEROBIC GENE SET: ')
-    ## now print statistics for a random set of genes with the same length as the anaerobic genes.
-    aerobic_rando_set = choose_random_tags(gene_data,len(aerobic_gene_data[0]))
-    aerobic_random_csvfile = '../results/random-aerobic-set.csv'
-    print('printing random genes to:',aerobic_random_csvfile)
-    print_random_gene_csv(aerobic_rando_set,gene_data, aerobic_random_csvfile)
-    aerobic_rando_gene_data = filter_gene_data(gene_data,aerobic_rando_set)
-    random_aerobic_string = print_target_size_statistics('random_aerobic', aerobic_rando_gene_data)    
-
-    strings_to_write = [anaerobic_string, aerobic_string, random_anaerobic_string, random_aerobic_string, total_genome_string]
+    strings_to_write = [anaerobic_string, aerobic_string, total_genome_string]
 
     statoutf = '../results/target_size.csv'
-    print('writing statistics for aerobic-anaerobic-metagenomics.R to:',statoutf)
+    print('writing statistics to:',statoutf)
     write_stats_to_file(statoutf, strings_to_write)
     

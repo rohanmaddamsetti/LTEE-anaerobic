@@ -1,7 +1,7 @@
 ## aerobic-anaerobic-metagenomics.R by Rohan Maddamsetti.
 
-## IMPORTANT TODO: numbers of aerobic and anaerobic genes don't exactly match those in
-## measureTargetSize.py. Debug this before publication.
+## IMPORTANT: numbers of aerobic and anaerobic genes don't exactly match those in
+## measureTargetSize.py. At present that script is not used in this analysis at all.
 
 ## IMPORTANT: run anaerobic-anaerobic-genomics.R first, to generate
 ## anaerobic-specific-genes.csv and aerobic-specific-genes.csv.
@@ -11,9 +11,6 @@
 ## examine different kinds of mutations and genes.
 
 ## MAKE SURE THAT ZEROS IN MUTATION COUNTS ARE NOT THROWN OUT BY DPLYR!
-
-## use harmonic average of p-value for aggregation? Or Fisher's method?
-## See Daniel Wilson's recent papers.
 
 library(tidyverse)
 ##########################################################################
@@ -97,6 +94,64 @@ calc.cumulative.muts <- function(data, normalization.constant=NA) {
         na.omit()
     return(c.dat)
 }
+
+## calculate the tail probabilities of the true cumulative mutation trajectory
+## of a given vector of genes (a 'module'), based on resampling
+## random sets of genes. Returns both upper tail of null distribution,
+## or P(random trajectory >= the actual trajectory).
+## Output: a dataframe with three columns: Population, count, p.val
+calculate.trajectory.tail.probs <- function(data, gene.vec, N=10000, normalization.constant=NA) {
+
+    ## resamples have the same cardinality as the gene.vec.
+    subset.size <- length(gene.vec)
+    
+    ## This function takes the index for the current draw, and samples the data,
+    ## generating a random gene set for which to calculate cumulative mutations.
+    generate.cumulative.mut.subset <- function(idx) {
+        rando.genes <- sample(unique(data$Gene),subset.size)
+        mut.subset <- filter(data,Gene %in% rando.genes)
+        c.mut.subset <- calc.cumulative.muts(mut.subset, normalization.constant) %>%
+            mutate(bootstrap_replicate=idx)
+        return(c.mut.subset)
+    }
+
+    ## make a dataframe of bootstrapped trajectories.
+    ## look at accumulation of stars over time for random subsets of genes.
+
+    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
+
+    gene.vec.data <- data %>% filter(Gene %in% gene.vec)
+    data.trajectory <- calc.cumulative.muts(gene.vec.data,normalization.constant)
+    data.trajectory.summary <- data.trajectory %>%
+        group_by(Population,.drop=FALSE) %>%
+        summarize(final.norm.cs=max(normalized.cs)) %>%
+        ungroup()
+    
+    trajectory.summary <- bootstrapped.trajectories %>%
+        ## important: don't drop empty groups.
+        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
+        summarize(final.norm.cs=max(normalized.cs)) %>%
+        ungroup() 
+
+    trajectory.filter.helper <- function(pop.trajectories) {
+        pop <- unique(pop.trajectories$Population)
+        data.traj <- filter(data.trajectory.summary,Population == pop)
+        final.data.norm.cs <- unique(data.traj$final.norm.cs)
+        tail.trajectories <- filter(pop.trajectories, final.norm.cs >= final.data.norm.cs)
+        return(tail.trajectories)
+    }
+    
+    ## split by Population, then filter for bootstraps > data trajectory.
+    uppertail.probs <- trajectory.summary %>%
+        split(.$Population) %>%
+        map_dfr(.f=trajectory.filter.helper) %>%
+        group_by(Population) %>%
+        summarize(count=n()) %>%
+        mutate(p.val=count/N)
+        
+    return(uppertail.probs)
+}
+
 #########################################################################
 ## calculate cumulative numbers of mutations in each category.
 ## Then, make plots to see if any interesting patterns emerge.
@@ -209,129 +264,177 @@ add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=FALSE) {
         }
     return(p)
 }
-#########################################################################
-## examine dS over the genome.
-gene.dS.mutation.data <- gene.mutation.data %>%
-filter(Annotation=='synonymous')
-
-## examing dN over the genome.
-gene.dN.mutation.data <- gene.mutation.data %>%
-filter(Annotation=='missense')
-
-## let's look at nonsense mutations.
-gene.nonsense.mutation.data <- gene.mutation.data %>%
-    filter(Annotation=='nonsense')
-
-## let's look at noncoding mutations.
-gene.noncoding.mutation.data <- filter(gene.mutation.data,Annotation=='noncoding')
-
-
-## normalizing constants need to be consistent with the null distributions!
-## gene length normalization now calculated by default in calc.cumulative.muts.
-
-## let's look at all mutations within genes.
-c.mutations <- calc.cumulative.muts(gene.mutation.data)
-                                    
-aerobic.mutation.data <- filter(gene.mutation.data,aerobic==TRUE)
-anaerobic.mutation.data <- filter(gene.mutation.data,anaerobic==TRUE)
-
-aerobic.dN.mutation.data <- filter(aerobic.mutation.data,
-                                   Annotation=='missense')
-anaerobic.dN.mutation.data <- filter(anaerobic.mutation.data,
-                                     Annotation=='missense')
-
-aerobic.dS.mutation.data <- filter(aerobic.mutation.data,
-                                   Annotation=='synonymous')
-anaerobic.dS.mutation.data <- filter(anaerobic.mutation.data,
-                                     Annotation=='synonymous')
-
-aerobic.nonsense.mutation.data <- filter(aerobic.mutation.data,
-                                   Annotation=='nonsense')
-anaerobic.nonsense.mutation.data <- filter(anaerobic.mutation.data,
-                                     Annotation=='nonsense')
-
-## NOTE APPARENT PARALLELISM IN NON-CODING MUTATIONS!
-## INVESTIGATE THIS FURTHER AT THE END.
-aerobic.noncoding.mutation.data <- filter(aerobic.mutation.data,
-                                      Annotation=='noncoding')
-anaerobic.noncoding.mutation.data <- filter(anaerobic.mutation.data,
-                                      Annotation=='noncoding')
-
-c.aerobic.mutations <- calc.cumulative.muts(aerobic.mutation.data)
-c.anaerobic.mutations <- calc.cumulative.muts(anaerobic.mutation.data)
-
-c.aerobic.dN.mutations <- calc.cumulative.muts(aerobic.dN.mutation.data)
-c.anaerobic.dN.mutations <- calc.cumulative.muts(anaerobic.dN.mutation.data)
-
-c.aerobic.dS.mutations <- calc.cumulative.muts(aerobic.dS.mutation.data)
-c.anaerobic.dS.mutations <- calc.cumulative.muts(anaerobic.dS.mutation.data)
-
-c.aerobic.nonsense.mutations <- calc.cumulative.muts(aerobic.nonsense.mutation.data)
-c.anaerobic.nonsense.mutations <- calc.cumulative.muts(anaerobic.nonsense.mutation.data)
-
-## normalize noncoding mutations by 1 across the board.
-c.aerobic.noncoding.mutations <- calc.cumulative.muts(aerobic.noncoding.mutation.data,
-                                                      normalization.constant=NA)
-
-c.anaerobic.noncoding.mutations <- calc.cumulative.muts(anaerobic.noncoding.mutation.data,
-                                                        normalization.constant=NA)
 
 #############################################################################
-## Figures. Plot real data on top of the random expectations to plot hypothesis tests.
+## Analysis and figures.
+## Plot real data on top of the random expectations to plot hypothesis tests.
+
+## look at all mutations within genes.
+## calculate p-values for all mutations.
+aerobic.allmut.pvals <- calculate.trajectory.tail.probs(gene.mutation.data, aerobic.genes$Gene)
+anaerobic.allmut.pvals <- calculate.trajectory.tail.probs(gene.mutation.data, anaerobic.genes$Gene)
 
 ## plot all classes of mutations in aerobic versus anaerobic genes.
-## Figure for All Mutation Classes.
+## profile code to see how number of bootstraps affects runtime.
+start.time <- Sys.time()
+
+c.aerobic.mutations <- gene.mutation.data %>%
+    filter(aerobic==TRUE) %>%
+    calc.cumulative.muts()
+
+c.anaerobic.mutations <- gene.mutation.data %>%
+    filter(anaerobic==TRUE) %>%
+    calc.cumulative.muts()
+
 c.aerobic.vs.anaerobic.plot <- plot.base.layer(gene.mutation.data) %>%
     add.cumulative.mut.layer(c.aerobic.mutations,my.color='black') %>%
     add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red')
 ggsave(filename="../results/figures/AllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot)
 
-## plot all mutations, except for noncoding mutations (don't know how to normalize those).
-gene.
+end.time <- Sys.time()
+time.taken <- end.time - start.time
+time.taken
+## end of profiling.
+## 7 min for 10,000 bootstraps.
+## PDF image is 28MB on disk.
 
-## make the same plot, for structural variation, indels, nonsense mutations.
+######
+## indels, structural variation (mobile elements), and nonsense mutations.
+
 sv.indel.nonsense.muts <- gene.mutation.data %>%
     filter(Annotation %in% c("sv", "indel", "nonsense"))
-c.sv.indel.nonsense.muts <- calc.cumulative.muts(sv.indel.nonsense.muts)
+
+## calculate p-values.
+aerobic.sv.indel.nonsense.pvals <- calculate.trajectory.tail.probs(sv.indel.nonsense.muts, aerobic.genes$Gene)
+anaerobic.sv.indel.nonsense.pvals <- calculate.trajectory.tail.probs(sv.indel.nonsense.muts, anaerobic.genes$Gene)
+
+######
+## plot structural variation, indels, nonsense mutations.
 
 ## aerobic in black
-aerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
-    filter(aerobic==TRUE)
-c.aerobic.sv.indel.nonsense.muts <- calc.cumulative.muts(aerobic.sv.indel.nonsense.muts)
+c.aerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
+    filter(aerobic==TRUE) %>%
+    calc.cumulative.muts()
 
 ## anaerobic in red
-anaerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
-    filter(anaerobic==TRUE)
-c.anaerobic.sv.indel.nonsense.muts <- calc.cumulative.muts(anaerobic.sv.indel.nonsense.muts)
+c.anaerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
+    filter(anaerobic==TRUE) %>%
+    calc.cumulative.muts()
 
-
+## make and save plot.
 aerobic.anaerobic.purifying.plot <- plot.base.layer(sv.indel.nonsense.muts) %>%
     add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts, my.color="red")
 ggsave(filename="../results/figures/SVIndelNonsense.pdf", plot=aerobic.anaerobic.purifying.plot)
 
+######
+## examine dN.
+gene.dN.mutation.data <- gene.mutation.data %>%
+filter(Annotation=='missense')
+## calculate p-values for dN.
+aerobic.dN.pvals <- calculate.trajectory.tail.probs(gene.dN.mutation.data, aerobic.genes$Gene)
+anaerobic.dN.pvals <- calculate.trajectory.tail.probs(gene.dN.mutation.data, anaerobic.genes$Gene)
+
 ## plot just dN.
+c.aerobic.dN.mutations <- gene.dN.mutation.data %>%
+    filter(aerobic==TRUE) %>%
+    calc.cumulative.muts()
+c.anaerobic.dN.mutations <- gene.dN.mutation.data %>%
+    filter(anaerobic==TRUE) %>%
+    calc.cumulative.muts()
+
 aerobic.anaerobic.dN.plot <- plot.base.layer(gene.dN.mutation.data) %>%
         add.cumulative.mut.layer(c.aerobic.dN.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red")    
 ggsave(filename="../results/figures/dN.pdf", plot=aerobic.anaerobic.dN.plot)
 
 
-## plot just dS.
+######
+## examine dS over the genome.
+gene.dS.mutation.data <- gene.mutation.data %>%
+    filter(Annotation=='synonymous')
+## calculate p-values for dS.
+aerobic.dS.pvals <- calculate.trajectory.tail.probs(gene.dS.mutation.data, aerobic.genes$Gene)
+anaerobic.dS.pvals <- calculate.trajectory.tail.probs(gene.dS.mutation.data, anaerobic.genes$Gene)
+
+## plot dS.
+c.aerobic.dS.mutations <- gene.dS.mutation.data %>%
+    filter(aerobic==TRUE) %>%
+    calc.cumulative.muts()
+
+c.anaerobic.dS.mutations <- gene.dS.mutation.data %>%
+    filter(anaerobic==TRUE) %>%
+    calc.cumulative.muts()
+
 aerobic.anaerobic.dS.plot <- plot.base.layer(gene.dS.mutation.data) %>%
     add.cumulative.mut.layer(c.aerobic.dS.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.dS.mutations, my.color="red") 
 ggsave(filename="../results/figures/dS.pdf", plot=aerobic.anaerobic.dS.plot)
 
+######
+## nonsense mutations.
+gene.nonsense.mutation.data <- gene.mutation.data %>%
+    filter(Annotation=='nonsense')
+## calculate p-values for nonsense.
+aerobic.nonsense.pvals <- calculate.trajectory.tail.probs(gene.nonsense.mutation.data, aerobic.genes$Gene)
+anaerobic.nonsense.pvals <- calculate.trajectory.tail.probs(gene.nonsense.mutation.data, anaerobic.genes$Gene)
+
 ## plot just nonsense mutations.
+c.aerobic.nonsense.mutations <- gene.nonsense.mutation.data %>%
+    filter(aerobic==TRUE) %>%
+    calc.cumulative.muts()
+c.anaerobic.nonsense.mutations <- gene.nonsense.mutation.data %>%
+    filter(anaerobic==TRUE) %>%
+    calc.cumulative.muts()
+
 aerobic.anaerobic.nonsense.plot <- plot.base.layer(gene.nonsense.mutation.data) %>%
     add.cumulative.mut.layer(c.aerobic.nonsense.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.nonsense.mutations, my.color="red") 
 ggsave(filename="../results/figures/nonsense.pdf", plot=aerobic.anaerobic.nonsense.plot)
 
-## plot just non-coding mutations.
+######
+## summary of p-value results.
+
+p1 <- aerobic.allmut.pvals %>% mutate(mut.class='all') %>% mutate(gene.class='aerobic')
+p2 <- anaerobic.allmut.pvals %>% mutate(mut.class='all') %>% mutate(gene.class='anaerobic')
+
+p3 <- aerobic.sv.indel.nonsense.pvals %>% mutate(mut.class='sv.indel.nonsense') %>% mutate(gene.class='aerobic')
+p4 <- anaerobic.sv.indel.nonsense.pvals %>% mutate(mut.class='sv.indel.nonsense') %>% mutate(gene.class='anaerobic')
+
+p5 <- aerobic.dN.pvals %>% mutate(mut.class='dN') %>% mutate(gene.class='aerobic')
+p6 <- anaerobic.dN.pvals %>% mutate(mut.class='dN') %>% mutate(gene.class='anaerobic')
+
+p7 <- aerobic.dS.pvals %>% mutate(mut.class='dS') %>% mutate(gene.class='aerobic')
+p8 <- anaerobic.dS.pvals %>% mutate(mut.class='dS') %>% mutate(gene.class='anaerobic')
+
+p9 <- aerobic.nonsense.pvals %>% mutate(mut.class='nonsense') %>% mutate(gene.class='aerobic')
+p10 <- anaerobic.nonsense.pvals %>% mutate(mut.class='nonsense') %>% mutate(gene.class='anaerobic')
+
+pval.summary <- rbind(p1,p2,p3,p4,p5,p6,p7,p8,p9,p10) %>%
+    mutate(hypermutator=ifelse((Population %in% hypermutator.pops),TRUE,FALSE))
+    
+write.csv(pval.summary,"../results/trajectory-pvalues.csv")
+
+######
+## let's look at noncoding mutations.
+## WARNING: we have to be careful about the appropriate normalization for noncoding mutations.
+## I am assuming that these are within the ORF-- but I haven't explicitly checked.
+## Hold off on report this result for now (maybe cut entirely.)
+
 ## divide by gene length since we've filtered out intergenic mutations
 ## from gene.mutation.data.
+## Still not sure if this is the right normalization.
+
+gene.noncoding.mutation.data <- filter(gene.mutation.data,Annotation=='noncoding')
+
+c.aerobic.noncoding.mutations <- gene.noncoding.mutation.data %>%
+    filter(aerobic==TRUE) %>%
+    calc.cumulative.muts(normalization.constant=NA)
+
+c.anaerobic.noncoding.mutations <- gene.noncoding.mutation.data %>%
+    filter(anaerobic==TRUE) %>%
+    calc.cumulative.muts(normalization.constant=NA)
+
 aerobic.anaerobic.noncoding.plot <- plot.base.layer(gene.noncoding.mutation.data,
                                                     normalization.constant=NA) %>%
     add.cumulative.mut.layer(c.aerobic.noncoding.mutations, my.color="black") %>%
@@ -342,22 +445,26 @@ ggsave(filename="../results/figures/noncoding.pdf", plot=aerobic.anaerobic.nonco
 ########################################################################################
 ## LOOK AT PARALLEL EVOLUTION IN NON-CODING MUTATIONS!
 ## LOOK AT mntH and hupA
-aerobic.noncoding.summary <- aerobic.noncoding.mutation.data %>% group_by(Gene,Position) %>%
+aerobic.noncoding.summary <- gene.noncoding.mutation.data %>%
+    filter(aerobic==TRUE) %>% group_by(Gene,Position) %>%
     summarize(count=n()) %>% arrange(desc(count,Position))
 
-aerobic.noncoding.summary2 <- aerobic.noncoding.mutation.data %>% group_by(Gene) %>%
+aerobic.noncoding.summary2 <- gene.noncoding.mutation.data %>%
+    filter(aerobic==TRUE) %>% group_by(Gene) %>%
     summarize(count=n()) %>% filter(count>1) %>% arrange(desc(count,Position))
 
 aerobic.noncoding.summary3 <- filter(aerobic.noncoding.summary, Gene %in% aerobic.noncoding.summary2$Gene)
 
-anaerobic.noncoding.summary <- anaerobic.noncoding.mutation.data %>% group_by(Gene,Position) %>% summarize(count=n()) %>% arrange(desc(count,Position))
+anaerobic.noncoding.summary <- gene.noncoding.mutation.data %>%
+    filter(anaerobic==TRUE) %>% group_by(Gene,Position) %>% summarize(count=n()) %>% arrange(desc(count,Position))
 
-anaerobic.noncoding.summary2 <- anaerobic.noncoding.mutation.data %>% group_by(Gene) %>%
+anaerobic.noncoding.summary2 <- gene.noncoding.mutation.data %>%
+    filter(anaerobic==TRUE) %>% group_by(Gene) %>%
     summarize(count=n()) %>% filter(count > 1) %>% arrange(desc(count,Position))
 
 anaerobic.noncoding.summary3 <- filter(anaerobic.noncoding.summary, Gene %in% anaerobic.noncoding.summary2$Gene)
 
-## let's look at all noncoding mutations.
+## let's look at all noncoding mutations-- not just those associated with genes.
 noncoding.mutation.data <- mutation.data %>% filter(Annotation=='noncoding')
 
 noncoding.summary1 <- noncoding.mutation.data %>% group_by(Gene,Position) %>%
