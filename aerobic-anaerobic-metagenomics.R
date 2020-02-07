@@ -65,57 +65,6 @@ duplicate.genes <- gene.mutation.data %>%
 ## filter those duplicates.
 gene.mutation.data <- filter(gene.mutation.data, !(Gene %in% duplicate.genes$Gene))
 
-####### Constants. REVAMP THIS CODE!
-## from measureIntergenicTargetSize.py:
-## Length of intergenic regions: 487863
-## Needed to normalize cumulative mutations in non-coding regions.
-##intergenic.length <- 487863
-
-## from aerobic-anaerobic-genomics.R: ########
-######################NOTE: DOUBLE CHECK CONSISTENT WITH measureTargetSize.py. output!!!!!
-
-##anaerobic.gene.length <- 457593
-##aerobic.gene.length <- 219286
-##########################################################################
-
-## Normalization constant calculations.
-## IMPORTANT-- THIS STEP IS REALLY IMPORTANT.
-## NOT CLEAR HOW TO NORMALIZE IN ORDER TO COMPARE DIFFERENT CLASSES OF MUTATIONS
-## "APPLES TO APPLES".
-
-
-## IMPORTANT TODO: check difference between normalizing by gene length and normalizing
-## by synonymous/nonsynonymous opportunities. The end result should be very similar.
-## Then consider refactoring to just use REL606_IDs.csv to get gene lengths.
-
-## IMPORTANT TODO: split nonsynonymous into opportunities for missense and nonsense
-## mutations, as separate classes, to fit annotation given in Ben Good's data.
-
-## Example of how to try this normalization.
-##dN.normalization.const <- total.length * total.nonsynon.sites/(total.synon.sites+total.nonsynon.sites)
-##dS.normalization.const <- total.length * total.synon.sites/(total.synon.sites+total.nonsynon.sites)
-
-#####################################################
-## Think about cutting this stuff-- internal consistency is most important in the
-## comparison to the bootstrapped null.
-
-## numbers gotten by running measureTargetSize.py.
-## Use these to normalize cumulative mutations over time.
-##target.size.numbers <- read.csv('../results/target_size.csv',header=TRUE,as.is=TRUE)
-
-##anaerobic.length <- filter(target.size.numbers,set=='anaerobic')$total_gene_length
-##anaerobic.synon.sites <- filter(target.size.numbers,set=='anaerobic')$synon_sites
-##anaerobic.nonsynon.sites <- filter(target.size.numbers,set=='anaerobic')$non_synon_sites
-
-##aerobic.length <- filter(target.size.numbers,set=='aerobic')$total_gene_length
-##aerobic.synon.sites <- filter(target.size.numbers,set=='aerobic')$synon_sites
-##aerobic.nonsynon.sites <- filter(target.size.numbers,set=='aerobic')$non_synon_sites
-
-
-##total.length <- filter(target.size.numbers,set=='genome')$total_gene_length
-##total.synon.sites <- filter(target.size.numbers,set=='genome')$synon_sites
-##total.nonsynon.sites <- filter(target.size.numbers,set=='genome')$non_synon_sites
-
 ########################################
 ## look at accumulation of stars over time.
 ## in other words, look at the rates at which the mutations occur over time.
@@ -322,10 +271,10 @@ c.anaerobic.nonsense.mutations <- calc.cumulative.muts(anaerobic.nonsense.mutati
 
 ## normalize noncoding mutations by 1 across the board.
 c.aerobic.noncoding.mutations <- calc.cumulative.muts(aerobic.noncoding.mutation.data,
-                                                      normalization.constant=1)
+                                                      normalization.constant=NA)
 
 c.anaerobic.noncoding.mutations <- calc.cumulative.muts(anaerobic.noncoding.mutation.data,
-                                                        normalization.constant=1)
+                                                        normalization.constant=NA)
 
 #############################################################################
 ## Figures. Plot real data on top of the random expectations to plot hypothesis tests.
@@ -336,6 +285,9 @@ c.aerobic.vs.anaerobic.plot <- plot.base.layer(gene.mutation.data) %>%
     add.cumulative.mut.layer(c.aerobic.mutations,my.color='black') %>%
     add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red')
 ggsave(filename="../results/figures/AllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot)
+
+## plot all mutations, except for noncoding mutations (don't know how to normalize those).
+gene.
 
 ## make the same plot, for structural variation, indels, nonsense mutations.
 sv.indel.nonsense.muts <- gene.mutation.data %>%
@@ -378,10 +330,10 @@ aerobic.anaerobic.nonsense.plot <- plot.base.layer(gene.nonsense.mutation.data) 
 ggsave(filename="../results/figures/nonsense.pdf", plot=aerobic.anaerobic.nonsense.plot)
 
 ## plot just non-coding mutations.
-## normalize by 1 since dividing by gene length doesn't make sense in this case.
-## BUG: NORMALIZATION IS STILL OFF!
+## divide by gene length since we've filtered out intergenic mutations
+## from gene.mutation.data.
 aerobic.anaerobic.noncoding.plot <- plot.base.layer(gene.noncoding.mutation.data,
-                                                    normalization.constant=1) %>%
+                                                    normalization.constant=NA) %>%
     add.cumulative.mut.layer(c.aerobic.noncoding.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.noncoding.mutations, my.color="red")
 aerobic.anaerobic.noncoding.plot
