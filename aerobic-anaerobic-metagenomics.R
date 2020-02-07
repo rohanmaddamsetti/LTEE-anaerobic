@@ -12,6 +12,9 @@
 
 ## MAKE SURE THAT ZEROS IN MUTATION COUNTS ARE NOT THROWN OUT BY DPLYR!
 
+## use harmonic average of p-value for aggregation? Or Fisher's method?
+## See Daniel Wilson's recent papers.
+
 library(tidyverse)
 ##########################################################################
 
@@ -117,10 +120,12 @@ gene.mutation.data <- filter(gene.mutation.data, !(Gene %in% duplicate.genes$Gen
 ## look at accumulation of stars over time.
 ## in other words, look at the rates at which the mutations occur over time.
 ## plot cumulative sum of anaerobic and aerobic dS and dN in each population.
+
 cumsum.per.pop.helper.func <- function(df) {
     df %>%
         arrange(t0) %>%
-        group_by(Population,Generation) %>%
+        ## very important: don't drop empty groups because we want to keep zeros.
+        group_by(Population,Generation,.drop=FALSE) %>%
         summarize(count=n()) %>%
         mutate(cs=cumsum(count)) %>%
         ungroup()
@@ -150,18 +155,18 @@ calc.cumulative.muts <- function(data, normalization.constant=NA) {
 plot.cumulative.muts <- function(mut.data,logscale=TRUE, my.color="black") {
     if (logscale) {
         p <- ggplot(mut.data,aes(x=Generation,y=log10(normalized.cs))) +
-            ylim(-7,-2) +
+            ##ylim(-7,-2) +
             ylab('log[Cumulative number of mutations (normalized)]')
     } else {
         p <- ggplot(mut.data,aes(x=Generation,y=normalized.cs)) +
-            ylim(0,0.003) +
+            ##ylim(0,0.003) +
             ylab('Cumulative number of mutations (normalized)')
     }
     p <- p +
         theme_classic() +
         geom_point(size=0.2, color=my.color) +
         geom_step(size=0.2, color=my.color) +
-        facet_wrap(.~Population,scales='fixed',nrow=4) +
+        facet_wrap(.~Population,scales='free',nrow=4) +
         xlab('Generations (x 10,000)') +
         xlim(0,6.3) +
         theme(axis.title.x = element_text(size=14),
@@ -258,10 +263,148 @@ c.aerobic.vs.anaerobic.plot1 <- plot.cumulative.muts(c.aerobic.mutations,my.colo
     add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=TRUE)
 ggsave(filename="../results/figures/logAllMutFig.pdf", plot=c.aerobic.vs.anaerobic.plot1)
 
-c.aerobic.vs.anaerobic.plot2 <- c.aerobic.vs.anaerobic.plot1 %>%
-    add.cumulative.mut.layer(c.mutations, my.color='grey',logscale=TRUE)
-ggsave(filename="../results/figures/logAllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot2)
+## Let's try some new visualizations.
 
+plot.base.layer <- function(data, subset.size=300, N=1000, logscale=TRUE) {
+
+    ## This function takes the index for the current draw, and samples the data,
+    ## generating a random gene set for which to calculate cumulative mutations.
+    generate.cumulative.mut.subset <- function(idx) {
+        rando.genes <- sample(unique(data$Gene),subset.size)
+        mut.subset <- filter(data,Gene %in% rando.genes)
+        c.mut.subset <- calc.cumulative.muts(mut.subset) %>%
+            mutate(bootstrap_replicate=idx)
+        return(c.mut.subset)
+    }
+
+    ## make a dataframe of bootstrapped trajectories.
+    ## look at accumulation of stars over time for random subsets of genes.
+    ## I want to plot the distribution of cumulative mutations over time for
+    ## say, 1000 or 10000 random subsets of genes.
+
+    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
+
+    ## filter out the top 2.5% and bottom 2.5% of trajectories from each population,
+    ## for a two-sided test at alpha = 0.05.
+    
+    trajectory.summary <- bootstrapped.trajectories %>%
+        ## important: don't drop empty groups.
+        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
+        summarize(final.norm.cs=max(normalized.cs)) %>%
+        ungroup() 
+    
+    top.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(0.025) %>%
+        select(-final.norm.cs) %>%
+        mutate(in.top=TRUE)
+    
+    bottom.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(-0.025) %>%
+        select(-final.norm.cs) %>%
+        mutate(in.bottom=TRUE)
+    
+    filtered.trajectories <- bootstrapped.trajectories %>%
+        left_join(top.trajectories) %>%
+        left_join(bottom.trajectories) %>%
+        filter(is.na(in.top)) %>%
+        filter(is.na(in.bottom)) %>%
+        select(-in.top,-in.bottom)
+
+
+    if (logscale) {
+        p <- ggplot(filtered.trajectories,aes(x=Generation,y=log10(normalized.cs))) +
+            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=log10(normalized.cs)), color="gray",se=TRUE)
+            ylab('log[Cumulative number of mutations (normalized)]')
+    } else {
+        p <- ggplot(filtered.trajectories,aes(x=Generation,y=normalized.cs)) +
+            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=normalized.cs), color="gray",se=TRUE)
+            ylab('Cumulative number of mutations (normalized)')
+    }
+    p <- p +
+        theme_classic() +
+        geom_point(size=0.2, color='gray') +
+        facet_wrap(.~Population,scales='free',nrow=4) +
+        xlab('Generations (x 10,000)') +
+        xlim(0,6.3) +
+        theme(axis.title.x = element_text(size=14),
+              axis.title.y = element_text(size=14),
+              axis.text.x  = element_text(size=14),
+              axis.text.y  = element_text(size=14))
+    return(p)                
+}
+
+add.smooth.mean.layer <- function(p, data, subset.size=300, N=1000, logscale=TRUE) {
+
+    ## This function takes the index for the current draw, and samples the data,
+    ## generating a random gene set for which to calculate cumulative mutations.
+    generate.cumulative.mut.subset <- function(idx) {
+        rando.genes <- sample(unique(data$Gene),subset.size)
+        mut.subset <- filter(data,Gene %in% rando.genes)
+        c.mut.subset <- calc.cumulative.muts(mut.subset) %>%
+            mutate(bootstrap_replicate=idx)
+        return(c.mut.subset)
+    }
+
+    ## make a dataframe of bootstrapped trajectories.
+    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
+
+    ## filter out the top 2.5% and bottom 2.5% of trajectories from each population,
+    ## for a two-sided test at alpha = 0.05.
+    
+    trajectory.summary <- bootstrapped.trajectories %>%
+        ## important: don't drop empty groups.
+        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
+        summarize(final.norm.cs=max(normalized.cs)) %>%
+        ungroup() 
+    
+    top.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(0.025) %>%
+        select(-final.norm.cs) %>%
+        mutate(in.top=TRUE)
+    
+    bottom.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(-0.025) %>%
+        select(-final.norm.cs) %>%
+        mutate(in.bottom=TRUE)
+    
+    filtered.trajectories <- bootstrapped.trajectories %>%
+        left_join(top.trajectories) %>%
+        left_join(bottom.trajectories) %>%
+        filter(is.na(in.top)) %>%
+        filter(is.na(in.bottom)) %>%
+        select(-in.top,-in.bottom)
+        
+    
+    if (logscale) {
+        p <- p +
+            geom_point(data=filtered.trajectories, aes(x=Generation,y=log10(normalized.cs)), color="gray",size=0.2)
+            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=log10(normalized.cs)), color="gray",se=TRUE)
+        
+    } else {
+        p <- p +
+            geom_point(data=filtered.trajectories, aes(x=Generation,y=normalized.cs), color="gray",size=0.2)
+            ##geom_smooth(data=bootstrapped.trajectories, aes(x=Generation,y=normalized.cs), color="gray",se=TRUE)
+    }
+    return(p)
+}
+
+
+c.aerobic.vs.anaerobic.plot2 <- plot.base.layer(gene.mutation.data,logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.aerobic.mutations,my.color='black',logscale=TRUE) %>%
+    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=TRUE)
+
+c.aerobic.vs.anaerobic.plot3 <- plot.base.layer(gene.mutation.data,logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.aerobic.mutations,my.color='black',logscale=FALSE) %>%
+    add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red',logscale=FALSE)
+
+
+
+ggsave(filename="../results/figures/logAllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot2)
+ggsave(filename="../results/figures/AllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot3)
 
 ## make the same plot, for structural variation, indels, nonsense mutations.
 ## all genes in gray
@@ -323,9 +466,6 @@ aerobic.anaerobic.noncoding.plot1
 ggsave(filename="../results/figures/log-noncoding.pdf", plot=aerobic.anaerobic.noncoding.plot1)
 
 ##########################################################################
-## look at accumulation of stars over time for random subsets of genes.
-## I want to plot the distribution of cumulative mutations over time for
-## say, 1000 or 10000 random subsets of genes.
 
 plot.random.subsets <- function(data, subset.size=300, N=1000,logscale=TRUE) {
 

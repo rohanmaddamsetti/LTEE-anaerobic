@@ -142,8 +142,9 @@ binom.test(x = nrow(filter(nonmutator.50K.in.up.O2.data,snp_type=='nonsynonymous
            p=target.prob,
            alternative="two.sided")
 
-## By using a more accurate target distribution, it's clear that this effect is driven by
-## non-point mutations. There's no significant reduction in hits if we JUST consider non-synonymous mutations.
+## By using a more accurate target distribution,
+## it's clear that this effect is largely driven by
+## non-point mutations, but is still significant when we restrict to point mutations.
 
 ## just considering dN-- result is marginally insignificant (p = 0.05893).
 mutator.50K.in.up.O2.data.just.dN <- filter(mutator.50K.in.up.O2.data, snp_type == 'nonsynonymous')
@@ -154,13 +155,31 @@ binom.test(x = nrow(mutator.50K.in.up.O2.data.just.dN),
            p = target.prob2,
            alternative="two.sided")
 
-## my guess is that dS will reduce this signal-- but I'm wrong! (p = 0.03417)
+## more significant when considering dS! (p = 0.03417)
 mutator.50K.in.up.O2.data.dNanddS <- filter(mutator.50K.in.up.O2.data, snp_type %in% c('nonsynonymous','synonymous'))
 mutator.50K.in.down.O2.data.dNanddS <- filter(mutator.50K.in.down.O2.data, snp_type %in% c('nonsynonymous','synonymous'))
 
 binom.test(x = nrow(mutator.50K.in.up.O2.data.dNanddS),
            n = nrow(mutator.50K.in.up.O2.data.dNanddS)+nrow(mutator.50K.in.down.O2.data.dNanddS),
            p = target.prob3,
+           alternative="two.sided")
+
+## And more significant again when including (rare) nonsense mutations (p = 0.02631).
+mutator.50K.in.up.O2.data.just.pointmut <- mutator.50K.in.up.O2.data %>%
+    filter(snp_type != 'not_snp')
+
+mutator.50K.in.down.O2.data.just.pointmut <- mutator.50K.in.down.O2.data %>%
+    filter(snp_type != 'not_snp')
+
+binom.test(x = nrow(mutator.50K.in.up.O2.data.just.pointmut),
+           n = nrow(mutator.50K.in.up.O2.data.just.pointmut)+nrow(mutator.50K.in.down.O2.data.just.pointmut),
+           p = target.prob3,
+           alternative="two.sided")
+
+## although marginally insignificant if we just use gene.length to normalize (p = 0.0525).
+binom.test(x = nrow(mutator.50K.in.up.O2.data.just.pointmut),
+           n = nrow(mutator.50K.in.up.O2.data.just.pointmut)+nrow(mutator.50K.in.down.O2.data.just.pointmut),
+           p = target.prob,
            alternative="two.sided")
 
 ##################
