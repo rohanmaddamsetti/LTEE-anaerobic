@@ -63,6 +63,13 @@ duplicate.genes <- gene.mutation.data %>%
 gene.mutation.data <- filter(gene.mutation.data, !(Gene %in% duplicate.genes$Gene))
 
 ########################################
+## function for plotting better y-axis labels.
+## see solution here for nice scientific notation on axes.
+## https://stackoverflow.com/questions/10762287/how-can-i-format-axis-labels-with-exponents-with-ggplot2-and-scales
+fancy_scientific <- function(x) {
+    ifelse(x==0, "0", parse(text=gsub("[+]", "", gsub("e", " %*% 10^", scales::scientific_format()(x)))))
+}
+
 ## look at accumulation of stars over time.
 ## in other words, look at the rates at which the mutations occur over time.
 ## plot cumulative sum of anaerobic and aerobic dS and dN in each population.
@@ -160,11 +167,9 @@ calculate.trajectory.tail.probs <- function(data, gene.vec, N=10000, normalizati
 plot.cumulative.muts <- function(mut.data,logscale=TRUE, my.color="black") {
     if (logscale) {
         p <- ggplot(mut.data,aes(x=Generation,y=log10(normalized.cs))) +
-            ##ylim(-7,-2) +
             ylab('log[Cumulative number of mutations (normalized)]')
     } else {
         p <- ggplot(mut.data,aes(x=Generation,y=normalized.cs)) +
-            ##ylim(0,0.003) +
             ylab('Cumulative number of mutations (normalized)')
     }
     p <- p +
@@ -247,7 +252,9 @@ plot.base.layer <- function(data, subset.size=300, N=1000, alpha = 0.05, logscal
         theme(axis.title.x = element_text(size=14),
               axis.title.y = element_text(size=14),
               axis.text.x  = element_text(size=14),
-              axis.text.y  = element_text(size=14))
+              axis.text.y  = element_text(size=14)) +
+        scale_y_continuous(labels=fancy_scientific)
+    
     return(p)                
 }
 
@@ -257,11 +264,11 @@ add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=FALSE) {
         p <- p +
             geom_point(data=layer.df, aes(x=Generation,y=log10(normalized.cs)), color=my.color, size=0.2) +
             geom_step(data=layer.df, aes(x=Generation,y=log10(normalized.cs)), size=0.2, color=my.color)
-        } else {
-            p <- p +
-                geom_point(data=layer.df, aes(x=Generation,y=normalized.cs), color=my.color, size=0.2) +
-                geom_step(data=layer.df, aes(x=Generation,y=normalized.cs), size=0.2, color=my.color)
-        }
+    } else {
+        p <- p +
+            geom_point(data=layer.df, aes(x=Generation,y=normalized.cs), color=my.color, size=0.2) +
+            geom_step(data=layer.df, aes(x=Generation,y=normalized.cs), size=0.2, color=my.color)
+    }
     return(p)
 }
 
