@@ -135,35 +135,6 @@ calc.cumulative.muts <- function(d, normalization.constant=NA) {
     return(c.dat)
 }
 
-old.calc.cumulative.muts <- function(data, normalization.constant=NA) {
-
-    cumsum.per.pop.helper.func <- function(df) {
-        df %>%
-            arrange(t0) %>%
-            ## very important: don't drop empty groups because we want to keep zeros.
-            group_by(Population,Generation,.drop=FALSE) %>%
-            summarize(count=n()) %>%
-            mutate(cs=cumsum(count)) %>%
-            ungroup()
-    }
-
-    
-    ## if normalization.constant is not provided, then
-    ## calculate based on gene length by default.
-    if (is.na(normalization.constant)) {
-        my.genes <- data %>% select(Gene,gene_length) %>% distinct()
-        normalization.constant <- sum(my.genes$gene_length)
-    }
-    
-    c.dat <- data %>%
-        split(.$Population) %>%
-        map_dfr(.f=cumsum.per.pop.helper.func) %>%
-        mutate(normalized.cs=cs/normalization.constant) %>%
-        ## remove any NA values.
-        na.omit()
-    return(c.dat)
-}
-
 ## calculate the tail probabilities of the true cumulative mutation trajectory
 ## of a given vector of genes (a 'module'), based on resampling
 ## random sets of genes. Returns both upper tail of null distribution,
