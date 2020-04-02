@@ -72,20 +72,82 @@ fancy_scientific <- function(x) {
 
 ## look at accumulation of stars over time.
 ## in other words, look at the rates at which the mutations occur over time.
-## plot cumulative sum of anaerobic and aerobic dS and dN in each population.
+## To normalize, we need to supply the number of sites at risk
+## (such as sum of gene length).
+calc.cumulative.muts <- function(d, normalization.constant=NA) {
 
-cumsum.per.pop.helper.func <- function(df) {
-    df %>%
-        arrange(t0) %>%
-        ## very important: don't drop empty groups because we want to keep zeros.
-        group_by(Population,Generation,.drop=FALSE) %>%
-        summarize(count=n()) %>%
-        mutate(cs=cumsum(count)) %>%
-        ungroup()
+    cumsum.per.pop.helper.func <- function(pop) {
+        finalgen <- 6.3 ## this is outside of the data collection
+        ## for nice plotting (final generation in mutation.data is 6.275).
+
+        ## This constant is to make sure that all pops are in the levels
+        ## of the Population factor after mergers, etc.
+        pop.levels <- c("Ara-5","Ara-6", "Ara+1", "Ara+2",
+                        "Ara+4", "Ara+5", "Ara-1", "Ara-2",
+                        "Ara-3", "Ara-4", "Ara+3", "Ara+6")
+        
+        df <- d %>% filter(Population==pop)
+        if (nrow(df) == 0) { ## if no mutations in this pop.
+            almost.done.df <- tibble(Population = factor(pop, levels = pop.levels),
+                                     Generation=finalgen,
+                                     count=0,
+                                     cs=0)
+        } else {
+            summary.df <- df %>%
+                arrange(t0) %>%
+                group_by(Population,Generation) %>%
+                summarize(count=n()) %>%
+                mutate(cs=cumsum(count)) %>%
+                ungroup()
+            ## if the final generation is not in ret.df,
+            ## then add one final row (for nicer plots).
+            final.row.df <- tibble(Population=factor(pop, levels = pop.levels),
+                                   Generation=finalgen,
+                                   count=max(summary.df$count),
+                                   cs=max(summary.df$cs))
+            
+            almost.done.df <- bind_rows(summary.df, final.row.df)
+        }
+        ## add an row for Generation == 0 (for nicer plots).
+        init.row.df <- tibble(
+            Population = factor(pop, levels = pop.levels),
+            Generation = 0,
+            count = 0,
+            cs = 0)
+        
+        ret.df <- bind_rows(init.row.df,almost.done.df)
+        return(ret.df)
+    }
+    
+    ## if normalization.constant is not provided, then
+    ## calculate based on gene length by default.
+    if (is.na(normalization.constant)) {
+        my.genes <- d %>% dplyr::select(Gene,gene_length) %>% distinct()
+        normalization.constant <- sum(my.genes$gene_length)
+    }
+    
+    c.dat <- map_dfr(.x=levels(d$Population),
+                     .f=cumsum.per.pop.helper.func) %>%
+        mutate(normalized.cs=cs/normalization.constant) %>%
+        ## remove any NA values.
+        na.omit()
+    
+    return(c.dat)
 }
 
-calc.cumulative.muts <- function(data, normalization.constant=NA) {
+old.calc.cumulative.muts <- function(data, normalization.constant=NA) {
 
+    cumsum.per.pop.helper.func <- function(df) {
+        df %>%
+            arrange(t0) %>%
+            ## very important: don't drop empty groups because we want to keep zeros.
+            group_by(Population,Generation,.drop=FALSE) %>%
+            summarize(count=n()) %>%
+            mutate(cs=cumsum(count)) %>%
+            ungroup()
+    }
+
+    
     ## if normalization.constant is not provided, then
     ## calculate based on gene length by default.
     if (is.na(normalization.constant)) {
@@ -253,7 +315,9 @@ plot.base.layer <- function(data, subset.size=300, N=1000, alpha = 0.05, logscal
               axis.title.y = element_text(size=14),
               axis.text.x  = element_text(size=14),
               axis.text.y  = element_text(size=14)) +
-        scale_y_continuous(labels=fancy_scientific)
+        scale_y_continuous(labels=fancy_scientific,
+                           breaks = scales::extended_breaks(n = 6),
+                           limits = c(0, NA))
     
     return(p)                
 }
