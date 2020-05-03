@@ -20,7 +20,6 @@ library(tidyverse)
 nonmutator.pops <- c("Ara-5", "Ara-6", "Ara+1", "Ara+2", "Ara+4", "Ara+5")
 hypermutator.pops <- c("Ara-1", "Ara-2", "Ara-3", "Ara-4", "Ara+3", "Ara+6")
 
-
 ## get the lengths of all genes in REL606.
 ## This excludes genes in repetitive regions of the genome.
 ## See Section 4.3.1 "Removing mutations in repetitive regions of the genome"
@@ -288,9 +287,8 @@ plot.base.layer <- function(data, subset.size=300, N=1000, alpha = 0.05, logscal
               axis.text.y  = element_text(size=14)) +
         scale_y_continuous(labels=fancy_scientific,
                            breaks = scales::extended_breaks(n = 6),
-                           limits = c(0, NA))
-    
-    return(p)                
+                           limits = c(0, NA))  
+    return(p)
 }
 
 ## take a ggplot object output by plot.cumulative.muts, and add an extra layer.
