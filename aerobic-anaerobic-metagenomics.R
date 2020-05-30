@@ -305,9 +305,65 @@ add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=FALSE) {
     return(p)
 }
 
+## add a base layer to a plot. used in Imodulon code.
+add.base.layer <- function(p, data, my.color, subset.size=50, N=1000, alpha = 0.05, normalization.constant=NA) {
+    
+        ## This function takes the index for the current draw, and samples the data,
+    ## generating a random gene set for which to calculate cumulative mutations.
+    generate.cumulative.mut.subset <- function(idx) {
+        rando.genes <- base::sample(unique(data$Gene),subset.size)
+        mut.subset <- filter(data,Gene %in% rando.genes)
+        c.mut.subset <- calc.cumulative.muts(mut.subset, normalization.constant) %>%
+            mutate(bootstrap_replicate=idx)
+        return(c.mut.subset)
+    }
+
+    ## make a dataframe of bootstrapped trajectories.
+    ## look at accumulation of stars over time for random subsets of genes.
+    ## I want to plot the distribution of cumulative mutations over time for
+    ## say, 1000 or 10000 random subsets of genes.
+    bootstrapped.trajectories <- map_dfr(.x=seq_len(N),.f=generate.cumulative.mut.subset)
+
+    ## filter out the top alpha/2 and bottom alpha/2 trajectories from each population,
+    ## for a two-sided test. default is alpha == 0.05.
+    
+    trajectory.summary <- bootstrapped.trajectories %>%
+        ## important: don't drop empty groups.
+        group_by(bootstrap_replicate, Population,.drop=FALSE) %>%
+        summarize(final.norm.cs=max(normalized.cs)) %>%
+        ungroup() 
+    
+    top.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(alpha/2) %>%
+        dplyr::select(-final.norm.cs) %>%
+        mutate(in.top=TRUE)
+    
+    bottom.trajectories <- trajectory.summary %>%
+        group_by(Population) %>%
+        top_frac(-alpha/2) %>%
+        dplyr::select(-final.norm.cs) %>%
+        mutate(in.bottom=TRUE)
+    
+    filtered.trajectories <- bootstrapped.trajectories %>%
+        left_join(top.trajectories) %>%
+        left_join(bottom.trajectories) %>%
+        filter(is.na(in.top)) %>%
+        filter(is.na(in.bottom)) %>%
+        dplyr::select(-in.top,-in.bottom)
+
+    p <- p + geom_point(data=filtered.trajectories,
+                        aes(x=Generation, y=normalized.cs),
+                        size=0.2, color=my.color)
+    return(p)                
+}
+
 #############################################################################
 ## Analysis and figures.
 ## Plot real data on top of the random expectations to plot hypothesis tests.
+
+aerobic.cardinality <- length(unique(aerobic.genes$Gene))
+anaerobic.cardinality <- length(unique(anaerobic.genes$Gene))
 
 ## look at all mutations within genes.
 ## calculate p-values for all mutations.
@@ -326,7 +382,9 @@ c.anaerobic.mutations <- gene.mutation.data %>%
     filter(anaerobic==TRUE) %>%
     calc.cumulative.muts()
 
-c.aerobic.vs.anaerobic.plot <- plot.base.layer(gene.mutation.data) %>%
+c.aerobic.vs.anaerobic.plot <- plot.base.layer(gene.mutation.data,subset.size=aerobic.cardinality) %>%
+    add.base.layer(gene.mutation.data, ##add null for anaerobic genes.
+                   subset.size=anaerobic.cardinality, my.color='pink') %>%
     add.cumulative.mut.layer(c.aerobic.mutations,my.color='black') %>%
     add.cumulative.mut.layer(c.anaerobic.mutations, my.color='red')
 ggsave(filename="../results/figures/AllMutFig2.pdf", plot=c.aerobic.vs.anaerobic.plot)
@@ -362,7 +420,10 @@ c.anaerobic.sv.indel.nonsense.muts <- sv.indel.nonsense.muts %>%
     calc.cumulative.muts()
 
 ## make and save plot.
-aerobic.anaerobic.purifying.plot <- plot.base.layer(sv.indel.nonsense.muts) %>%
+aerobic.anaerobic.purifying.plot <- plot.base.layer(sv.indel.nonsense.muts,
+                                                    subset.size=aerobic.cardinality) %>%
+    add.base.layer(sv.indel.nonsense.muts, ##add null for anaerobic genes.
+                   subset.size=anaerobic.cardinality, my.color='pink') %>%
     add.cumulative.mut.layer(c.aerobic.sv.indel.nonsense.muts, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.sv.indel.nonsense.muts, my.color="red")
 ggsave(filename="../results/figures/SVIndelNonsense.pdf", plot=aerobic.anaerobic.purifying.plot)
@@ -383,7 +444,10 @@ c.anaerobic.dN.mutations <- gene.dN.mutation.data %>%
     filter(anaerobic==TRUE) %>%
     calc.cumulative.muts()
 
-aerobic.anaerobic.dN.plot <- plot.base.layer(gene.dN.mutation.data) %>%
+aerobic.anaerobic.dN.plot <- plot.base.layer(gene.dN.mutation.data,
+                                             subset.size=aerobic.cardinality) %>%
+    add.base.layer(gene.dN.mutation.data, ##add null for anaerobic genes.
+                   subset.size=anaerobic.cardinality, my.color='pink') %>%
         add.cumulative.mut.layer(c.aerobic.dN.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.dN.mutations, my.color="red")    
 ggsave(filename="../results/figures/dN.pdf", plot=aerobic.anaerobic.dN.plot)
@@ -406,7 +470,10 @@ c.anaerobic.dS.mutations <- gene.dS.mutation.data %>%
     filter(anaerobic==TRUE) %>%
     calc.cumulative.muts()
 
-aerobic.anaerobic.dS.plot <- plot.base.layer(gene.dS.mutation.data) %>%
+aerobic.anaerobic.dS.plot <- plot.base.layer(gene.dS.mutation.data,
+                                             subset.size=aerobic.cardinality) %>%
+    add.base.layer(gene.dS.mutation.data, ##add null for anaerobic genes.
+                   subset.size=anaerobic.cardinality, my.color='pink') %>%
     add.cumulative.mut.layer(c.aerobic.dS.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.dS.mutations, my.color="red") 
 ggsave(filename="../results/figures/dS.pdf", plot=aerobic.anaerobic.dS.plot)
@@ -427,7 +494,10 @@ c.anaerobic.nonsense.mutations <- gene.nonsense.mutation.data %>%
     filter(anaerobic==TRUE) %>%
     calc.cumulative.muts()
 
-aerobic.anaerobic.nonsense.plot <- plot.base.layer(gene.nonsense.mutation.data) %>%
+aerobic.anaerobic.nonsense.plot <- plot.base.layer(gene.nonsense.mutation.data,
+                                                   subset.size=aerobic.cardinality) %>%
+        add.base.layer(gene.nonsense.mutation.data, ##add null for anaerobic genes.
+                   subset.size=anaerobic.cardinality, my.color='pink') %>%
     add.cumulative.mut.layer(c.aerobic.nonsense.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.nonsense.mutations, my.color="red") 
 ggsave(filename="../results/figures/nonsense.pdf", plot=aerobic.anaerobic.nonsense.plot)
@@ -476,7 +546,11 @@ c.anaerobic.noncoding.mutations <- gene.noncoding.mutation.data %>%
     calc.cumulative.muts(normalization.constant=NA)
 
 aerobic.anaerobic.noncoding.plot <- plot.base.layer(gene.noncoding.mutation.data,
+                                                    subset.size=aerobic.cardinality,
                                                     normalization.constant=NA) %>%
+    add.base.layer(gene.noncoding.mutation.data, ##add null for anaerobic genes.
+                   subset.size=anaerobic.cardinality, my.color='pink',
+                   normalization.constant=NA) %>%
     add.cumulative.mut.layer(c.aerobic.noncoding.mutations, my.color="black") %>%
     add.cumulative.mut.layer(c.anaerobic.noncoding.mutations, my.color="red")
 aerobic.anaerobic.noncoding.plot
