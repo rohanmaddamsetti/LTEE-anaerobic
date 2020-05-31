@@ -308,7 +308,7 @@ add.cumulative.mut.layer <- function(p, layer.df, my.color, logscale=FALSE) {
 ## add a base layer to a plot. used in Imodulon code.
 add.base.layer <- function(p, data, my.color, subset.size=50, N=1000, alpha = 0.05, normalization.constant=NA) {
     
-        ## This function takes the index for the current draw, and samples the data,
+    ## This function takes the index for the current draw, and samples the data,
     ## generating a random gene set for which to calculate cumulative mutations.
     generate.cumulative.mut.subset <- function(idx) {
         rando.genes <- base::sample(unique(data$Gene),subset.size)
@@ -317,7 +317,7 @@ add.base.layer <- function(p, data, my.color, subset.size=50, N=1000, alpha = 0.
             mutate(bootstrap_replicate=idx)
         return(c.mut.subset)
     }
-
+    
     ## make a dataframe of bootstrapped trajectories.
     ## look at accumulation of stars over time for random subsets of genes.
     ## I want to plot the distribution of cumulative mutations over time for
